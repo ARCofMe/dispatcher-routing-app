@@ -13,6 +13,11 @@ export default function RoutePlanner({ techId }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [shareStatus, setShareStatus] = useState("");
+  const [hideCompleted, setHideCompleted] = useState(false);
+  const [prevMetrics, setPrevMetrics] = useState(null);
+  const [newStop, setNewStop] = useState({ name: "", address: "", duration_minutes: 30, window_start: "", window_end: "" });
+  const draftKey = useMemo(() => `route-draft-${techId}-${date}`, [techId, date]);
 
   const load = async () => {
     setLoading(true);
@@ -20,6 +25,7 @@ export default function RoutePlanner({ techId }) {
     try {
       const data = await fetchRoutePreview(techId, date, originAddress || undefined, destinationAddress || undefined);
       setRoute(data);
+      setPrevMetrics(data?.metrics || null);
       setRouteStats({ waypointMiles: data?.metrics?.total_distance_miles });
       setStatus("Preview loaded");
     } catch (err) {
@@ -34,6 +40,7 @@ export default function RoutePlanner({ techId }) {
     const manual_order = stops.map((s) => s.id);
     setRoute((prev) => (prev ? { ...prev, stops } : { stops, metrics: null }));
     try {
+      if (route?.metrics) setPrevMetrics(route.metrics);
       const updated = await simulateRoute({
         existing_assignments: stops,
         added_stops: [],
@@ -72,6 +79,84 @@ export default function RoutePlanner({ techId }) {
   };
 
   const path = useMemo(() => route?.path || [], [route]);
+
+  const handleStatusChange = (index, nextStatus) => {
+    setRoute((prev) => {
+      if (!prev) return prev;
+      const updatedStops = prev.stops.map((s, idx) => (idx === index ? { ...s, status: nextStatus } : s));
+      return { ...prev, stops: updatedStops };
+    });
+  };
+
+  const handleEditStop = async (index, updatedFields) => {
+    setRoute((prev) => {
+      if (!prev) return prev;
+      const updatedStops = prev.stops.map((s, idx) => (idx === index ? { ...s, ...updatedFields } : s));
+      return { ...prev, stops: updatedStops };
+    });
+    if (route?.metrics) setPrevMetrics(route.metrics);
+    try {
+      const updated = await simulateRoute({
+        existing_assignments: route.stops.map((s, idx) => (idx === index ? { ...s, ...updatedFields } : s)),
+        added_stops: [],
+        removed_ids: [],
+        manual_order: route.stops.map((s) => s.id),
+        origin: originAddress || undefined,
+        destination: destinationAddress || undefined,
+      });
+      setRoute(updated);
+      setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
+      setStatus("Stop updated");
+    } catch {
+      setError("Unable to update stop");
+    }
+  };
+
+  const saveDraft = () => {
+    if (!route) return;
+    localStorage.setItem(
+      draftKey,
+      JSON.stringify({ route, originAddress, destinationAddress })
+    );
+    setStatus("Draft saved");
+  };
+
+  const loadDraft = () => {
+    const raw = localStorage.getItem(draftKey);
+    if (!raw) {
+      setStatus("No draft found");
+      return;
+    }
+    try {
+      const data = JSON.parse(raw);
+      setRoute(data.route);
+      setOriginAddress(data.originAddress || "");
+      setDestinationAddress(data.destinationAddress || "");
+      setRouteStats({ waypointMiles: data.route?.metrics?.total_distance_miles });
+      setStatus("Draft loaded");
+    } catch {
+      setStatus("Draft load failed");
+    }
+  };
+
+  const buildRouteUrl = () => {
+    const parts = [];
+    if (originAddress) parts.push(originAddress);
+    (route?.stops || []).forEach((s) => parts.push(s.address || `${s.lat},${s.lon}`));
+    if (destinationAddress) parts.push(destinationAddress);
+    const filtered = parts.filter(Boolean);
+    return "https://www.google.com/maps/dir/" + filtered.map(encodeURIComponent).join("/");
+  };
+
+  const copyRoute = async () => {
+    try {
+      await navigator.clipboard.writeText(buildRouteUrl());
+      setShareStatus("Route link copied");
+      setTimeout(() => setShareStatus(""), 2000);
+    } catch (err) {
+      setShareStatus("Unable to copy");
+    }
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -155,8 +240,148 @@ export default function RoutePlanner({ techId }) {
       {route && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div>
-            <StopList stops={route.stops} onReorder={handleReorder} />
-            <MetricsPanel metrics={route.metrics} routeStats={routeStats} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ color: "#cbd5e1", fontSize: 13 }}>Route stops</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#cbd5e1" }}>
+                  <input type="checkbox" checked={hideCompleted} onChange={(e) => setHideCompleted(e.target.checked)} />
+                  Hide completed
+                </label>
+                <button
+                  onClick={saveDraft}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #475569",
+                    background: "rgba(51,65,85,0.6)",
+                    color: "#e2e8f0",
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  Save draft
+                </button>
+                <button
+                  onClick={loadDraft}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #475569",
+                    background: "rgba(51,65,85,0.6)",
+                    color: "#e2e8f0",
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  Load draft
+                </button>
+                <button
+                  onClick={copyRoute}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #475569",
+                    background: "rgba(51,65,85,0.6)",
+                    color: "#e2e8f0",
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  Copy route link
+                </button>
+                {shareStatus && <span style={{ color: "#34d399", fontSize: 12 }}>{shareStatus}</span>}
+              </div>
+            </div>
+            <StopList
+              stops={hideCompleted ? route.stops.filter((s) => s.status !== "complete") : route.stops}
+              onReorder={handleReorder}
+              onStatusChange={handleStatusChange}
+              onEditStop={handleEditStop}
+            />
+            <div style={{ marginTop: 10, padding: 12, borderRadius: 12, border: "1px solid #334155", background: "rgba(30,41,59,0.6)" }}>
+              <div style={{ color: "#cbd5e1", marginBottom: 8, fontSize: 13 }}>Add ad-hoc stop</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <input
+                  type="text"
+                  placeholder="Customer / label"
+                  value={newStop.name}
+                  onChange={(e) => setNewStop((p) => ({ ...p, name: e.target.value }))}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                />
+                <input
+                  type="text"
+                  placeholder="Address"
+                  value={newStop.address}
+                  onChange={(e) => setNewStop((p) => ({ ...p, address: e.target.value }))}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                />
+                <input
+                  type="number"
+                  placeholder="Duration (mins)"
+                  value={newStop.duration_minutes}
+                  onChange={(e) => setNewStop((p) => ({ ...p, duration_minutes: Number(e.target.value) || 0 }))}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    type="time"
+                    value={newStop.window_start}
+                    onChange={(e) => setNewStop((p) => ({ ...p, window_start: e.target.value }))}
+                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                  />
+                  <input
+                    type="time"
+                    value={newStop.window_end}
+                    onChange={(e) => setNewStop((p) => ({ ...p, window_end: e.target.value }))}
+                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                  />
+                </div>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <button
+                  onClick={async () => {
+                    if (!newStop.address) return;
+                    const stop = {
+                      id: `adhoc-${Date.now()}`,
+                      customer_name: newStop.name || "Ad-hoc Stop",
+                      address: newStop.address,
+                      duration_minutes: newStop.duration_minutes || 30,
+                      window_start: newStop.window_start || undefined,
+                      window_end: newStop.window_end || undefined,
+                    };
+                    const updatedStops = [...(route?.stops || []), stop];
+                    setRoute((prev) => (prev ? { ...prev, stops: updatedStops } : { stops: updatedStops, metrics: prev?.metrics }));
+                    setPrevMetrics(route?.metrics || null);
+                    try {
+                      const updated = await simulateRoute({
+                        existing_assignments: updatedStops,
+                        added_stops: [stop],
+                        removed_ids: [],
+                        manual_order: updatedStops.map((s) => s.id),
+                        origin: originAddress || undefined,
+                        destination: destinationAddress || undefined,
+                      });
+                      setRoute(updated);
+                      setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
+                      setStatus("Ad-hoc stop added");
+                    } catch (err) {
+                      setError("Unable to add stop");
+                    }
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #475569",
+                    background: "#1d4ed8",
+                    color: "#e2e8f0",
+                    cursor: "pointer",
+                  }}
+                >
+                  Add stop
+                </button>
+              </div>
+            </div>
+            <MetricsPanel metrics={route.metrics} routeStats={routeStats} prevMetrics={prevMetrics} />
           </div>
           <MapPanel
             stops={route.stops}

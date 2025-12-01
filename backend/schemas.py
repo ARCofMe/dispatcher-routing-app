@@ -11,3 +11,6 @@ class Stop:
     window_end: Optional[str] = None
     lat: Optional[float] = None
     lon: Optional[float] = None
+    service_request_id: Optional[str] = None
+    subject: Optional[str] = None
+    status: Optional[str] = None

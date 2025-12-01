@@ -183,5 +183,9 @@ class BlueFolderService:
                 window_end=window_end,
                 lat=assignment.get("lat"),
                 lon=assignment.get("lon"),
+                # Extra context passed through to frontend
+                service_request_id=assignment.get("serviceRequestId"),
+                subject=assignment.get("subject"),
+                status=assignment.get("status") or "pending",
             )
         )
