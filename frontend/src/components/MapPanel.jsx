@@ -30,6 +30,16 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
     .map(([lat, lon]) => ({ lat: Number(lat), lng: Number(lon) }));
 
   useEffect(() => {
+    if (!isLoaded || !(window.google && window.google.maps)) return;
+    if (mapRef.current && markers.length) {
+      const bounds = new window.google.maps.LatLngBounds();
+      markers.forEach((m) => bounds.extend(m.position));
+      mapRef.current.panTo(markers[0].position);
+      mapRef.current.fitBounds(bounds, 80);
+    }
+  }, [markers, isLoaded]);
+
+  useEffect(() => {
     setDirections(null);
     if (!isLoaded || markers.length < 2) return;
     if (!(window.google && window.google.maps)) return;
@@ -70,16 +80,6 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
   if (!isLoaded) {
     return <div style={{ height: 400, border: "1px solid #ddd", borderRadius: 8 }}>Loading map…</div>;
   }
-
-  useEffect(() => {
-    if (!isLoaded || !(window.google && window.google.maps)) return;
-    if (mapRef.current && markers.length) {
-      const bounds = new window.google.maps.LatLngBounds();
-      markers.forEach((m) => bounds.extend(m.position));
-      mapRef.current.panTo(markers[0].position);
-      mapRef.current.fitBounds(bounds, 80);
-    }
-  }, [markers, isLoaded]);
 
   return (
     <div style={containerStyle}>
