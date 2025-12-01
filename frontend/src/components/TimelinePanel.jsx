@@ -1,3 +1,12 @@
+const slotFromWindow = (start) => {
+  if (!start) return "Anytime";
+  const [h] = start.split(":").map((v) => parseInt(v, 10));
+  if (h <= 8) return "7-12 AM";
+  if (h >= 12 && h <= 13) return "12-5 PM";
+  if (h >= 8 && h < 12) return "8-4 All Day";
+  return "Anytime";
+};
+
 export default function TimelinePanel({ stops }) {
   if (!stops || !stops.length) return null;
   return (
@@ -5,7 +14,7 @@ export default function TimelinePanel({ stops }) {
       <div style={{ marginBottom: 8, color: "#cbd5e1", fontSize: 13 }}>Timeline</div>
       <div style={{ display: "grid", gap: 8 }}>
         {stops.map((s, idx) => {
-          const windowLabel = s.window_start && s.window_end ? `${s.window_start}-${s.window_end}` : "Anytime";
+          const windowLabel = s.window_start ? slotFromWindow(s.window_start) : "Anytime";
           const late = s.eta && s.window_end && s.eta > s.window_end;
           return (
             <div key={`${s.id}-${idx}`} style={{ display: "grid", gridTemplateColumns: "40px 1fr", gap: 10, alignItems: "center" }}>

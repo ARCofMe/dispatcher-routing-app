@@ -425,7 +425,6 @@ export default function RoutePlanner({ techId }) {
                 </button>
               </div>
             </div>
-            <MetricsPanel metrics={route.metrics} routeStats={routeStats} prevMetrics={prevMetrics} legs={legs} />
           </div>
           <div style={{ display: "grid", gap: 12 }}>
             <MapPanel
@@ -435,6 +434,7 @@ export default function RoutePlanner({ techId }) {
               destinationAddress={destinationAddress || undefined}
               onRouteStats={(stats) => setRouteStats((prev) => ({ ...prev, ...stats }))}
             />
+            <MetricsPanel metrics={route.metrics} routeStats={routeStats} prevMetrics={prevMetrics} legs={legs} />
             <TimelinePanel stops={route.stops} />
             <div style={{ border: "1px solid #334155", borderRadius: 12, padding: 12, background: "rgba(15,23,42,0.5)", color: "#e2e8f0" }}>
               <div style={{ fontSize: 13, color: "#cbd5e1", marginBottom: 6 }}>Share to tech</div>
