@@ -19,6 +19,7 @@ export default function RoutePlanner({ techId }) {
   const [prevMetrics, setPrevMetrics] = useState(null);
   const [newStop, setNewStop] = useState({ name: "", address: "", duration_minutes: 30, window_start: "", window_end: "" });
   const draftKey = useMemo(() => `route-draft-${techId}-${date}`, [techId, date]);
+  const cacheKey = useMemo(() => `route-cache-${techId}-${date}`, [techId, date]);
   const [validation, setValidation] = useState({ late: 0 });
 
   const load = async () => {
@@ -30,8 +31,26 @@ export default function RoutePlanner({ techId }) {
       setPrevMetrics(data?.metrics || null);
       setRouteStats({ waypointMiles: data?.metrics?.total_distance_miles });
       setStatus("Preview loaded");
+      localStorage.setItem(
+        cacheKey,
+        JSON.stringify({ route: data, originAddress, destinationAddress })
+      );
     } catch (err) {
-      setError("Failed to load preview");
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          setRoute(parsed.route);
+          setOriginAddress(parsed.originAddress || "");
+          setDestinationAddress(parsed.destinationAddress || "");
+          setRouteStats({ waypointMiles: parsed.route?.metrics?.total_distance_miles });
+          setStatus("Loaded cached route");
+        } catch {
+          setError("Failed to load preview");
+        }
+      } else {
+        setError("Failed to load preview");
+      }
     } finally {
       setLoading(false);
     }
@@ -54,6 +73,10 @@ export default function RoutePlanner({ techId }) {
       setRoute(updated);
       setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
       setStatus("Simulation updated");
+      localStorage.setItem(
+        cacheKey,
+        JSON.stringify({ route: updated, originAddress, destinationAddress })
+      );
     } catch (err) {
       setError("Unable to simulate route");
     }
@@ -128,6 +151,10 @@ export default function RoutePlanner({ techId }) {
       setRoute(updated);
       setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
       setStatus("Stop updated");
+      localStorage.setItem(
+        cacheKey,
+        JSON.stringify({ route: updated, originAddress, destinationAddress })
+      );
     } catch {
       setError("Unable to update stop");
     }
@@ -199,7 +226,12 @@ export default function RoutePlanner({ techId }) {
   useEffect(() => {
     if (!route?.stops) return;
     const late = route.stops.filter((s) => s.eta && s.window_end && s.eta > s.window_end).length;
-    setValidation({ late });
+    const suggested = [...route.stops].sort((a, b) => {
+      const aw = a.window_start || "";
+      const bw = b.window_start || "";
+      return aw.localeCompare(bw);
+    });
+    setValidation({ late, suggested });
   }, [route]);
 
   return (
@@ -291,6 +323,24 @@ export default function RoutePlanner({ techId }) {
                   <input type="checkbox" checked={hideCompleted} onChange={(e) => setHideCompleted(e.target.checked)} />
                   Hide completed
                 </label>
+                <button
+                  onClick={() => {
+                    if (!validation.suggested) return;
+                    handleReorder(validation.suggested);
+                    setStatus("Suggested order applied");
+                  }}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #475569",
+                    background: "rgba(51,65,85,0.6)",
+                    color: "#e2e8f0",
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  Suggest by window
+                </button>
                 <button
                   onClick={saveDraft}
                   style={{
@@ -408,6 +458,10 @@ export default function RoutePlanner({ techId }) {
                       setRoute(updated);
                       setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
                       setStatus("Ad-hoc stop added");
+                      localStorage.setItem(
+                        cacheKey,
+                        JSON.stringify({ route: updated, originAddress, destinationAddress })
+                      );
                     } catch (err) {
                       setError("Unable to add stop");
                     }

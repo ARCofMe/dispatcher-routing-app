@@ -20,6 +20,11 @@ export default function MetricsPanel({metrics, routeStats, prevMetrics, legs = [
               {legs.map((leg, idx) => (
                 <li key={idx} style={{ fontSize: 12 }}>
                   Leg {idx + 1}: {leg.miles.toFixed(2)} miles
+                  {metrics.total_travel_minutes ? (
+                    <span style={{ color: "#93c5fd", marginLeft: 6 }}>
+                      ~{Math.round((leg.miles / totalRouteMiles) * metrics.total_travel_minutes)} mins
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>
