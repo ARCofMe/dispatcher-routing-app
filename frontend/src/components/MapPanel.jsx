@@ -8,6 +8,7 @@ const MAP_LIBRARIES = ["marker"];
 export default function MapPanel({ stops = [], path = [], originAddress, destinationAddress, onRouteStats }) {
   const [directions, setDirections] = useState(null);
   const [advSupported, setAdvSupported] = useState(false);
+  const [geoCache, setGeoCache] = useState({});
   const mapRef = useRef(null);
   const advMarkersRef = useRef([]);
   const { isLoaded, loadError } = useJsApiLoader({
@@ -15,17 +16,37 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
     libraries: MAP_LIBRARIES,
   });
 
+  useEffect(() => {
+    if (!isLoaded || !(window.google && window.google.maps)) return;
+    const geocoder = new window.google.maps.Geocoder();
+    stops.forEach((s) => {
+      if ((s.lat === undefined || s.lon === undefined) && s.address && !geoCache[s.id]) {
+        geocoder.geocode({ address: s.address }, (results, status) => {
+          if (status === "OK" && results && results[0]) {
+            const loc = results[0].geometry.location;
+            setGeoCache((prev) => ({ ...prev, [s.id]: { lat: loc.lat(), lng: loc.lng() } }));
+          }
+        });
+      }
+    });
+  }, [stops, isLoaded, geoCache]);
+
   const markers = useMemo(
     () =>
       stops
-        .filter((s) => s.lat !== undefined && s.lon !== undefined)
-        .map((s, idx) => ({
-          id: `${s.id}-${idx}`,
-          position: { lat: Number(s.lat), lng: Number(s.lon) },
-          label: `${idx + 1}`,
-          title: `${idx + 1}. ${s.customer_name}`,
-        })),
-    [stops]
+        .map((s, idx) => {
+          const lat = s.lat ?? geoCache[s.id]?.lat;
+          const lon = s.lon ?? geoCache[s.id]?.lng;
+          if (lat === undefined || lon === undefined) return null;
+          return {
+            id: `${s.id}-${idx}`,
+            position: { lat: Number(lat), lng: Number(lon) },
+            label: `${idx + 1}`,
+            title: `${idx + 1}. ${s.customer_name}`,
+          };
+        })
+        .filter(Boolean),
+    [stops, geoCache]
   );
 
   const center = markers[0]?.position || { lat: 39.5, lng: -98.35 };
