@@ -173,6 +173,13 @@ class BlueFolderService:
             except Exception:
                 pass
 
+        status = (
+            assignment.get("status")
+            or assignment.get("serviceRequestStatus")
+            or assignment.get("service_request_status")
+            or ("complete" if str(assignment.get("isComplete")).lower() in ("1", "true", "yes") else "scheduled")
+        )
+
         return asdict(
             Stop(
                 id=str(assignment.get("assignmentId") or assignment.get("serviceRequestId")),
@@ -186,6 +193,6 @@ class BlueFolderService:
                 # Extra context passed through to frontend
                 service_request_id=assignment.get("serviceRequestId"),
                 subject=assignment.get("subject"),
-                status=assignment.get("status") or assignment.get("isComplete") or "scheduled",
+                status=status,
             )
         )
