@@ -186,6 +186,6 @@ class BlueFolderService:
                 # Extra context passed through to frontend
                 service_request_id=assignment.get("serviceRequestId"),
                 subject=assignment.get("subject"),
-                status=assignment.get("status") or "pending",
+                status=assignment.get("status") or assignment.get("isComplete") or "scheduled",
             )
         )

@@ -2,12 +2,12 @@ import { useState } from "react";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 
 const badgeStyles = {
-  pending: { background: "rgba(147, 197, 253, 0.15)", color: "#bfdbfe", border: "1px solid rgba(147,197,253,0.4)" },
+  scheduled: { background: "rgba(147, 197, 253, 0.15)", color: "#bfdbfe", border: "1px solid rgba(147,197,253,0.4)" },
   "in-progress": { background: "rgba(251, 191, 36, 0.18)", color: "#fcd34d", border: "1px solid rgba(252,211,77,0.4)" },
   complete: { background: "rgba(74, 222, 128, 0.18)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.4)" },
 };
 
-const statusOrder = ["pending", "in-progress", "complete"];
+const statusOrder = ["scheduled", "in-progress", "complete"];
 
 const deriveEnd = (start, end) => {
   if (end) return end;
@@ -75,7 +75,7 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
                           <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
                             <button
                               onClick={() => {
-                                const current = s.status || "pending";
+                                const current = s.status || "scheduled";
                                 const next = statusOrder[(statusOrder.indexOf(current) + 1) % statusOrder.length];
                                 onStatusChange?.(i, next);
                               }}
@@ -83,13 +83,13 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
                                 fontSize: 11,
                                 padding: "2px 8px",
                                 borderRadius: 999,
-                                border: badgeStyles[s.status || "pending"].border,
-                                background: badgeStyles[s.status || "pending"].background,
-                                color: badgeStyles[s.status || "pending"].color,
+                                border: badgeStyles[s.status || "scheduled"].border,
+                                background: badgeStyles[s.status || "scheduled"].background,
+                                color: badgeStyles[s.status || "scheduled"].color,
                                 cursor: "pointer",
                               }}
                             >
-                              {s.status || "pending"}
+                              {s.status || "scheduled"}
                             </button>
                             <button
                               onClick={() => toggle(`edit-${s.id}-${i}`)}
