@@ -1,4 +1,4 @@
-export default function MetricsPanel({metrics, routeStats, prevMetrics}) {
+export default function MetricsPanel({metrics, routeStats, prevMetrics, legs = []}) {
   if(!metrics) return null;
   const waypointMiles = routeStats?.waypointMiles ?? (metrics.total_distance_miles ?? (metrics.total_distance_km*0.621371).toFixed(2));
   const totalRouteMiles = routeStats?.routeMiles ?? waypointMiles;
@@ -13,6 +13,18 @@ export default function MetricsPanel({metrics, routeStats, prevMetrics}) {
         <div><strong style={{ color: "#93c5fd" }}>Stops</strong> distance: {waypointMiles} miles</div>
         <div><strong style={{ color: "#93c5fd" }}>Travel</strong> time: {metrics.total_travel_minutes} mins {deltaTime !== null && <span style={{ color: deltaTime >= 0 ? "#fbbf24" : "#34d399" }}>({deltaTime >=0 ? "+" : ""}{deltaTime}m)</span>}</div>
         {metrics.estimated_completion && <div><strong style={{ color: "#93c5fd" }}>ETA finish</strong>: {metrics.estimated_completion}</div>}
+        {legs.length > 0 && (
+          <details style={{ marginTop: 6 }}>
+            <summary style={{ cursor: "pointer", color: "#cbd5e1" }}>Leg breakdown</summary>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 16, color: "#cbd5e1" }}>
+              {legs.map((leg, idx) => (
+                <li key={idx} style={{ fontSize: 12 }}>
+                  Leg {idx + 1}: {leg.miles.toFixed(2)} miles
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
     </div>
   );

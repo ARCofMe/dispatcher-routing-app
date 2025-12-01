@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, Marker, Polyline, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
 
 const containerStyle = { width: "100%", height: "400px", borderRadius: 8, overflow: "hidden", border: "1px solid #ddd" };
 
 export default function MapPanel({ stops = [], path = [], originAddress, destinationAddress, onRouteStats }) {
   const [directions, setDirections] = useState(null);
+  const mapRef = useRef(null);
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
   });
@@ -70,9 +71,23 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
     return <div style={{ height: 400, border: "1px solid #ddd", borderRadius: 8 }}>Loading map…</div>;
   }
 
+  useEffect(() => {
+    if (mapRef.current && markers.length) {
+      const bounds = new window.google.maps.LatLngBounds();
+      markers.forEach((m) => bounds.extend(m.position));
+      mapRef.current.panTo(markers[0].position);
+      mapRef.current.fitBounds(bounds, 80);
+    }
+  }, [markers]);
+
   return (
     <div style={containerStyle}>
-      <GoogleMap center={center} zoom={10} mapContainerStyle={{ width: "100%", height: "100%" }}>
+      <GoogleMap
+        center={center}
+        zoom={10}
+        mapContainerStyle={{ width: "100%", height: "100%" }}
+        onLoad={(map) => (mapRef.current = map)}
+      >
         {markers.map((m) => (
           <Marker key={m.id} position={m.position} label={m.label} title={m.title} />
         ))}

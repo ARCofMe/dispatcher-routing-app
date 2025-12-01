@@ -3,6 +3,7 @@ import { fetchRoutePreview, simulateRoute, commitRoute } from "../api/client";
 import StopList from "./StopList";
 import MetricsPanel from "./MetricsPanel";
 import MapPanel from "./MapPanel";
+import TimelinePanel from "./TimelinePanel";
 
 export default function RoutePlanner({ techId }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -18,6 +19,7 @@ export default function RoutePlanner({ techId }) {
   const [prevMetrics, setPrevMetrics] = useState(null);
   const [newStop, setNewStop] = useState({ name: "", address: "", duration_minutes: 30, window_start: "", window_end: "" });
   const draftKey = useMemo(() => `route-draft-${techId}-${date}`, [techId, date]);
+  const [validation, setValidation] = useState({ late: 0 });
 
   const load = async () => {
     setLoading(true);
@@ -79,6 +81,25 @@ export default function RoutePlanner({ techId }) {
   };
 
   const path = useMemo(() => route?.path || [], [route]);
+  const legs = useMemo(() => {
+    const hv = (a, b) => {
+      const toRad = (v) => (v * Math.PI) / 180;
+      const [lat1, lon1] = a;
+      const [lat2, lon2] = b;
+      const dlon = toRad(lon2 - lon1);
+      const dlat = toRad(lat2 - lat1);
+      const la1 = toRad(lat1);
+      const la2 = toRad(lat2);
+      const h = Math.sin(dlat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dlon / 2) ** 2;
+      return 2 * 6371 * Math.asin(Math.sqrt(h)); // km
+    };
+    const res = [];
+    for (let i = 1; i < path.length; i++) {
+      const km = hv(path[i - 1], path[i]);
+      res.push({ index: i, km, miles: km * 0.621371 });
+    }
+    return res;
+  }, [path]);
 
   const handleStatusChange = (index, nextStatus) => {
     setRoute((prev) => {
@@ -157,6 +178,29 @@ export default function RoutePlanner({ techId }) {
       setShareStatus("Unable to copy");
     }
   };
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key.toLowerCase() === "s") {
+          e.preventDefault();
+          saveDraft();
+        }
+        if (e.key.toLowerCase() === "c") {
+          e.preventDefault();
+          copyRoute();
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [route, originAddress, destinationAddress]);
+
+  useEffect(() => {
+    if (!route?.stops) return;
+    const late = route.stops.filter((s) => s.eta && s.window_end && s.eta > s.window_end).length;
+    setValidation({ late });
+  }, [route]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -381,15 +425,42 @@ export default function RoutePlanner({ techId }) {
                 </button>
               </div>
             </div>
-            <MetricsPanel metrics={route.metrics} routeStats={routeStats} prevMetrics={prevMetrics} />
+            <MetricsPanel metrics={route.metrics} routeStats={routeStats} prevMetrics={prevMetrics} legs={legs} />
           </div>
-          <MapPanel
-            stops={route.stops}
-            path={path}
-            originAddress={originAddress || undefined}
-            destinationAddress={destinationAddress || undefined}
-            onRouteStats={(stats) => setRouteStats((prev) => ({ ...prev, ...stats }))}
-          />
+          <div style={{ display: "grid", gap: 12 }}>
+            <MapPanel
+              stops={route.stops}
+              path={path}
+              originAddress={originAddress || undefined}
+              destinationAddress={destinationAddress || undefined}
+              onRouteStats={(stats) => setRouteStats((prev) => ({ ...prev, ...stats }))}
+            />
+            <TimelinePanel stops={route.stops} />
+            <div style={{ border: "1px solid #334155", borderRadius: 12, padding: 12, background: "rgba(15,23,42,0.5)", color: "#e2e8f0" }}>
+              <div style={{ fontSize: 13, color: "#cbd5e1", marginBottom: 6 }}>Share to tech</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => {
+                    const body = encodeURIComponent(`Route for ${date}:\n${buildRouteUrl()}\nFirst stop ETA: ${route?.stops?.[0]?.eta || "N/A"}`);
+                    window.open(`mailto:?subject=Route for ${date}&body=${body}`, "_blank");
+                  }}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #475569", background: "rgba(51,65,85,0.6)", color: "#e2e8f0", cursor: "pointer", fontSize: 12 }}
+                >
+                  Email route
+                </button>
+                <button
+                  onClick={() => {
+                    const text = encodeURIComponent(`Route for ${date}: ${buildRouteUrl()} (First ETA: ${route?.stops?.[0]?.eta || "N/A"})`);
+                    window.open(`sms:?&body=${text}`, "_blank");
+                  }}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #475569", background: "rgba(51,65,85,0.6)", color: "#e2e8f0", cursor: "pointer", fontSize: 12 }}
+                >
+                  SMS route
+                </button>
+                {validation.late > 0 && <span style={{ color: "#fbbf24", fontSize: 12 }}>{validation.late} stops past window</span>}
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
