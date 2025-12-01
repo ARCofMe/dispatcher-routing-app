@@ -63,38 +63,6 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
                       <div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <div style={{ fontWeight: 600 }}>{i + 1}. {s.customer_name}</div>
-                          <button
-                            onClick={() => {
-                              const current = s.status || "pending";
-                              const next = statusOrder[(statusOrder.indexOf(current) + 1) % statusOrder.length];
-                              onStatusChange?.(i, next);
-                            }}
-                            style={{
-                              fontSize: 11,
-                              padding: "2px 8px",
-                              borderRadius: 999,
-                              border: badgeStyles[s.status || "pending"].border,
-                              background: badgeStyles[s.status || "pending"].background,
-                              color: badgeStyles[s.status || "pending"].color,
-                              cursor: "pointer",
-                            }}
-                          >
-                            {s.status || "pending"}
-                          </button>
-                          <button
-                            onClick={() => toggle(`edit-${s.id}-${i}`)}
-                            style={{
-                              fontSize: 11,
-                              padding: "2px 8px",
-                              borderRadius: 6,
-                              border: "1px solid #475569",
-                              background: "rgba(51,65,85,0.5)",
-                              color: "#e2e8f0",
-                              cursor: "pointer",
-                            }}
-                          >
-                            {expanded[`edit-${s.id}-${i}`] ? "Close" : "Edit"}
-                          </button>
                         </div>
                         <div style={{ color: "#cbd5e1" }}>{s.address}</div>
                         <div style={{ color: "#cbd5e1", fontSize: 12 }}>
@@ -103,22 +71,57 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
                             <span style={{ marginLeft: 8, color: "#f87171" }}>(ETA past window)</span>
                           )}
                         </div>
-                        {(s.service_request_id || s.subject) && (
-                          <button
-                            onClick={() => toggle(`${s.id}-${i}`)}
-                            style={{
-                              marginTop: 6,
-                              padding: "4px 8px",
-                              borderRadius: 8,
-                              border: "1px solid #334155",
-                              background: "rgba(51,65,85,0.6)",
-                              color: "#93c5fd",
-                              cursor: "pointer",
-                              fontSize: 12,
-                            }}
-                          >
-                            {expanded[`${s.id}-${i}`] ? "Hide details" : "Show details"}
-                          </button>
+                        {(s.service_request_id || s.subject || true) && (
+                          <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                            <button
+                              onClick={() => {
+                                const current = s.status || "pending";
+                                const next = statusOrder[(statusOrder.indexOf(current) + 1) % statusOrder.length];
+                                onStatusChange?.(i, next);
+                              }}
+                              style={{
+                                fontSize: 11,
+                                padding: "2px 8px",
+                                borderRadius: 999,
+                                border: badgeStyles[s.status || "pending"].border,
+                                background: badgeStyles[s.status || "pending"].background,
+                                color: badgeStyles[s.status || "pending"].color,
+                                cursor: "pointer",
+                              }}
+                            >
+                              {s.status || "pending"}
+                            </button>
+                            <button
+                              onClick={() => toggle(`edit-${s.id}-${i}`)}
+                              style={{
+                                fontSize: 11,
+                                padding: "2px 8px",
+                                borderRadius: 6,
+                                border: "1px solid #475569",
+                                background: "rgba(51,65,85,0.5)",
+                                color: "#e2e8f0",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {expanded[`edit-${s.id}-${i}`] ? "Close" : "Edit"}
+                            </button>
+                            {(s.service_request_id || s.subject) && (
+                              <button
+                                onClick={() => toggle(`${s.id}-${i}`)}
+                                style={{
+                                  padding: "4px 8px",
+                                  borderRadius: 8,
+                                  border: "1px solid #334155",
+                                  background: "rgba(51,65,85,0.6)",
+                                  color: "#93c5fd",
+                                  cursor: "pointer",
+                                  fontSize: 12,
+                                }}
+                              >
+                                {expanded[`${s.id}-${i}`] ? "Hide details" : "Show details"}
+                              </button>
+                            )}
+                          </div>
                         )}
                         {expanded[`${s.id}-${i}`] && (
                           <div style={{ marginTop: 6, padding: 8, borderRadius: 8, border: "1px solid #334155", background: "rgba(15,23,42,0.6)", display: "grid", gap: 4 }}>
