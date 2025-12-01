@@ -3,13 +3,15 @@ import { GoogleMap, Polyline, DirectionsRenderer, useJsApiLoader } from "@react-
 
 const containerStyle = { width: "100%", height: "400px", borderRadius: 8, overflow: "hidden", border: "1px solid #ddd" };
 
+const MAP_LIBRARIES = ["marker"];
+
 export default function MapPanel({ stops = [], path = [], originAddress, destinationAddress, onRouteStats }) {
   const [directions, setDirections] = useState(null);
   const mapRef = useRef(null);
   const advMarkersRef = useRef([]);
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
-    libraries: ["marker"],
+    libraries: MAP_LIBRARIES,
   });
 
   const markers = useMemo(
