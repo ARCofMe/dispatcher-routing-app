@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { GoogleMap, Marker, Polyline, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
+import { GoogleMap, Polyline, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
 
 const containerStyle = { width: "100%", height: "400px", borderRadius: 8, overflow: "hidden", border: "1px solid #ddd" };
 
 export default function MapPanel({ stops = [], path = [], originAddress, destinationAddress, onRouteStats }) {
   const [directions, setDirections] = useState(null);
   const mapRef = useRef(null);
+  const advMarkersRef = useRef([]);
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
+    libraries: ["marker"],
   });
 
   const markers = useMemo(
@@ -37,6 +39,42 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
       mapRef.current.panTo(markers[0].position);
       mapRef.current.fitBounds(bounds, 80);
     }
+  }, [markers, isLoaded]);
+
+  useEffect(() => {
+    if (!isLoaded || !mapRef.current || !(window.google && window.google.maps)) return;
+    const renderMarkers = async () => {
+      try {
+        const { AdvancedMarkerElement } = await window.google.maps.importLibrary("marker");
+        // Clear old markers
+        advMarkersRef.current.forEach((mk) => mk && mk.map && mk.setMap(null));
+        advMarkersRef.current = [];
+        markers.forEach((m) => {
+          const labelEl = document.createElement("div");
+          labelEl.style.background = "#2563eb";
+          labelEl.style.color = "#e2e8f0";
+          labelEl.style.padding = "4px 6px";
+          labelEl.style.borderRadius = "999px";
+          labelEl.style.fontSize = "12px";
+          labelEl.style.boxShadow = "0 6px 12px rgba(0,0,0,0.25)";
+          labelEl.textContent = m.label;
+          const adv = new AdvancedMarkerElement({
+            position: m.position,
+            map: mapRef.current,
+            title: m.title,
+            content: labelEl,
+          });
+          advMarkersRef.current.push(adv);
+        });
+      } catch (e) {
+        // If AdvancedMarker fails, swallow to avoid crashing.
+      }
+    };
+    renderMarkers();
+    return () => {
+      advMarkersRef.current.forEach((mk) => mk && mk.map && mk.setMap(null));
+      advMarkersRef.current = [];
+    };
   }, [markers, isLoaded]);
 
   useEffect(() => {
@@ -89,9 +127,6 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
         mapContainerStyle={{ width: "100%", height: "100%" }}
         onLoad={(map) => (mapRef.current = map)}
       >
-        {markers.map((m) => (
-          <Marker key={m.id} position={m.position} label={m.label} title={m.title} />
-        ))}
         {directions ? (
           <DirectionsRenderer
             directions={directions}
