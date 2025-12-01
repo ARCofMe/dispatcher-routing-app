@@ -72,13 +72,14 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
   }
 
   useEffect(() => {
+    if (!isLoaded || !(window.google && window.google.maps)) return;
     if (mapRef.current && markers.length) {
       const bounds = new window.google.maps.LatLngBounds();
       markers.forEach((m) => bounds.extend(m.position));
       mapRef.current.panTo(markers[0].position);
       mapRef.current.fitBounds(bounds, 80);
     }
-  }, [markers]);
+  }, [markers, isLoaded]);
 
   return (
     <div style={containerStyle}>

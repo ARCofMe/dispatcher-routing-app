@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchRoutePreview, simulateRoute, commitRoute } from "../api/client";
 import StopList from "./StopList";
 import MetricsPanel from "./MetricsPanel";
