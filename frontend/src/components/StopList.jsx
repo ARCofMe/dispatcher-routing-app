@@ -9,6 +9,16 @@ const badgeStyles = {
 
 const statusOrder = ["pending", "in-progress", "complete"];
 
+const deriveEnd = (start, end) => {
+  if (end) return end;
+  if (!start) return "—";
+  const [h] = start.split(":").map((v) => parseInt(v, 10));
+  if (h <= 8) return "12:00";
+  if (h >= 12 && h <= 13) return "17:00";
+  if (h >= 8 && h < 12) return "16:00";
+  return "—";
+};
+
 export default function StopList({ stops, onReorder, onStatusChange, onEditStop }) {
   const [expanded, setExpanded] = useState({});
   const bfAccount = import.meta.env.VITE_BLUEFOLDER_ACCOUNT_NAME;
@@ -88,7 +98,7 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
                         </div>
                         <div style={{ color: "#cbd5e1" }}>{s.address}</div>
                         <div style={{ color: "#cbd5e1", fontSize: 12 }}>
-                          Window: {s.window_start || "—"} - {s.window_end || "—"}
+                          Window: {s.window_start || "—"} - {deriveEnd(s.window_start, s.window_end)}
                           {s.eta && s.window_end && s.eta > s.window_end && (
                             <span style={{ marginLeft: 8, color: "#f87171" }}>(ETA past window)</span>
                           )}
