@@ -29,6 +29,7 @@ Full-stack tool for dispatchers to preview, reorder, simulate, and commit daily 
 Copy `frontend/.env.example` to `frontend/.env` and fill:
 ```
 VITE_GOOGLE_MAPS_API_KEY=your_key
+VITE_GOOGLE_MAP_ID=your_map_id
 VITE_BLUEFOLDER_ACCOUNT_NAME=your_subdomain
 ```
 
@@ -59,6 +60,24 @@ npm install
 npm run dev
 ```
 
+## Quick Windows install (non-technical friendly)
+We ship a helper script that builds the frontend, sets up a Python virtualenv, installs backend deps, and runs everything on one port via Waitress.
+
+1) Install Node.js LTS and Python 3.11+ (add both to PATH).
+2) Fill `frontend/.env` with:
+   - `VITE_GOOGLE_MAPS_API_KEY`
+   - `VITE_GOOGLE_MAP_ID`
+   - `VITE_BLUEFOLDER_ACCOUNT_NAME`
+3) Open PowerShell and run from the repo root:
+   ```powershell
+   Set-Location path\to\dispatcher-routing-app
+   .\scripts\windows\install_and_run.ps1 -Port 5000
+   ```
+   - This installs frontend deps, builds `frontend/dist`, creates `backend\.venv`, installs backend deps (including Waitress), seeds `backend\.env` from `.env.example` if missing, and starts the server.
+4) Open http://localhost:5000
+
+To stop, close the PowerShell window (Ctrl+C). Re-run the script later to restart; it reuses the existing venv/node_modules.
+
 ## Notes on Integration
 - BlueFolder: `bluefolder_service.py` pulls techs/assignments via `BlueFolderIntegration`; map `_map_assignment_to_stop` to include duration/window/lat/lon when available. Status defaults to `pending`.
 - Routing: `routing_service.py` currently uses Haversine + geopy for metrics and honors manual order; plug in optimized-routing-extension for true optimization (replace `_optimize_order` and metrics as needed).
@@ -73,4 +92,4 @@ npm run dev
 
 ## Testing
 - Manual: verify preview/simulate/commit endpoints, map directions, drag/drop, ad-hoc stops, status badges, and drafts in the UI.
-- Automated tests not included; add as needed.
+- Automated: `cd backend && pytest` and `cd frontend && npm test -- --watch=false --reporter=dot`.

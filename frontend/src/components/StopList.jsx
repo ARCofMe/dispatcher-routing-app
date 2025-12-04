@@ -9,7 +9,7 @@ const badgeStyles = {
 
 const statusOrder = ["scheduled", "in-progress", "complete"];
 
-const deriveEnd = (start, end) => {
+export const deriveEnd = (start, end) => {
   if (end) return end;
   if (!start) return "—";
   const [h] = start.split(":").map((v) => parseInt(v, 10));
