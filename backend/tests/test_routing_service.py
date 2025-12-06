@@ -46,7 +46,7 @@ def test_missing_coordinates_are_geocoded(routing):
     ]
     result = routing.preview_route(copy.deepcopy(stops))
     latlons = [(s["lat"], s["lon"]) for s in result["stops"]]
-    assert latlons[0] == (6.0, 5.0)  # swapped because _geocode returns lon, lat
+    assert latlons[0] == (5.0, 6.0)
     assert latlons[1] == (2.0, 2.0)
     assert "123 Demo" in calls
 
@@ -62,3 +62,14 @@ def test_simulate_respects_manual_order(routing):
     result = routing.simulate_route(copy.deepcopy(stops), [], [], manual_order)
     returned_ids = [s["id"] for s in result["stops"]]
     assert returned_ids == manual_order
+
+
+def test_optimize_order_by_window(routing):
+    stops = [
+        {"id": "A", "address": "addrA", "window_start": "10:00", "lat": 0.0, "lon": 0.0},
+        {"id": "B", "address": "addrB", "window_start": "08:00", "lat": 0.0, "lon": 1.0},
+        {"id": "C", "address": "addrC", "window_start": "09:00", "lat": 0.0, "lon": 2.0},
+    ]
+    result = routing.simulate_route(copy.deepcopy(stops), [], [], [], optimize=True)
+    returned_ids = [s["id"] for s in result["stops"]]
+    assert returned_ids == ["B", "C", "A"]

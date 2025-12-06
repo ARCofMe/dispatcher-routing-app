@@ -40,8 +40,10 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
         <Droppable droppableId="stops">
           {(provided) => (
             <ol ref={provided.innerRef} {...provided.droppableProps} style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {stops.map((s, i) => (
-                <Draggable key={`${s.id}-${i}`} draggableId={`${s.id}-${i}`} index={i}>
+              {stops.map((s, i) => {
+                const dragId = String(s.__clientId || s.id || s.service_request_id || s.address || i);
+                return (
+                <Draggable key={dragId} draggableId={dragId} index={i}>
                   {(dragProvided) => (
                     <li
                       ref={dragProvided.innerRef}
@@ -147,7 +149,7 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
                     </li>
                   )}
                 </Draggable>
-              ))}
+              )})}
               {provided.placeholder}
             </ol>
           )}

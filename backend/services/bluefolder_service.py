@@ -33,6 +33,40 @@ class BlueFolderService:
         _maybe_extend_sys_path()
         self._integration = self._init_integration()
 
+    def _integration_with_credentials(self, api_key: Optional[str], account: Optional[str]):
+        if not api_key or not account:
+            return None
+        try:
+            from optimized_routing.bluefolder_integration import BlueFolderIntegration  # type: ignore
+            from bluefolder_api.client import BlueFolderClient  # type: ignore
+
+            def _build():
+                client = BlueFolderClient()
+                return BlueFolderIntegration(client=client)
+
+            return self._with_env_creds(api_key, account, _build)
+        except Exception:
+            return None
+
+    def _with_env_creds(self, api_key: Optional[str], account: Optional[str], fn):
+        prev_key = os.environ.get("BLUEFOLDER_API_KEY")
+        prev_account = os.environ.get("BLUEFOLDER_ACCOUNT_NAME")
+        try:
+            if api_key:
+                os.environ["BLUEFOLDER_API_KEY"] = api_key
+            if account:
+                os.environ["BLUEFOLDER_ACCOUNT_NAME"] = account
+            return fn()
+        finally:
+            if prev_key is not None:
+                os.environ["BLUEFOLDER_API_KEY"] = prev_key
+            else:
+                os.environ.pop("BLUEFOLDER_API_KEY", None)
+            if prev_account is not None:
+                os.environ["BLUEFOLDER_ACCOUNT_NAME"] = prev_account
+            else:
+                os.environ.pop("BLUEFOLDER_ACCOUNT_NAME", None)
+
     def _init_integration(self):
         try:
             from optimized_routing.bluefolder_integration import BlueFolderIntegration  # type: ignore
@@ -61,14 +95,46 @@ class BlueFolderService:
             except Exception:
                 return None
 
-    def list_techs(self):
+    def _client_with_credentials(self, api_key: Optional[str], account: Optional[str]):
+        if not api_key or not account:
+            return None
+        try:
+            from bluefolder_api.client import BlueFolderClient  # type: ignore
+
+            return self._with_env_creds(api_key, account, lambda: BlueFolderClient())
+        except Exception:
+            return None
+
+    def list_techs(self, api_key: Optional[str] = None, account: Optional[str] = None):
         """
         Return active technicians from BlueFolder.
         Uses BlueFolderIntegration.get_active_users() when available.
         """
-        if self._integration and hasattr(self._integration, "get_active_users"):
+        def _list_from_client():
+            client = self._client_with_credentials(api_key, account)
+            if client and hasattr(client, "users"):
+                techs = client.users.list_active()
+                return [
+                    {
+                        "id": int(t.get("userId") or t.get("id")),
+                        "name": f"{t.get('firstName','').strip()} {t.get('lastName','').strip()}".strip(),
+                    }
+                    for t in techs
+                    if t.get("userId") or t.get("id")
+                ]
+            return None
+
+        try:
+            techs = self._with_env_creds(api_key, account, _list_from_client)
+            if techs:
+                return techs
+        except Exception:
+            pass
+
+        integration = self._integration_with_credentials(api_key, account) or self._integration
+        if integration and hasattr(integration, "get_active_users"):
             try:
-                techs = self._integration.get_active_users()
+                techs = integration.get_active_users()
                 return [
                     {
                         "id": int(t.get("userId") or t.get("id")),
@@ -82,16 +148,30 @@ class BlueFolderService:
         # Demo fallback
         return [{"id": 1, "name": "Demo Tech"}]
 
-    def get_tech_assignments_for_day(self, tech_id: int, day: date) -> List[dict]:
+    def get_tech_assignments_for_day(self, tech_id: int, day: date, api_key: Optional[str] = None, account: Optional[str] = None) -> List[dict]:
         """
         Pull assignments for a technician on a given day.
         Real implementation uses BlueFolderIntegration.get_user_assignments_range.
         """
-        if self._integration and hasattr(self._integration, "get_user_assignments_range"):
-            try:
+        def _assignments_from_client():
+            client = self._client_with_credentials(api_key, account)
+            if client and hasattr(client, "assignments"):
                 start_date = f"{day.strftime('%Y.%m.%d')} 12:00 AM"
                 end_date = f"{day.strftime('%Y.%m.%d')} 11:59 PM"
-                assignments = self._integration.get_user_assignments_range(
+                return client.assignments.list_for_user_range(
+                    user_id=tech_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    date_range_type="scheduled",
+                )
+            return None
+
+        try:
+            integration = self._integration_with_credentials(api_key, account) or self._integration
+            if integration and hasattr(integration, "get_user_assignments_range"):
+                start_date = f"{day.strftime('%Y.%m.%d')} 12:00 AM"
+                end_date = f"{day.strftime('%Y.%m.%d')} 11:59 PM"
+                assignments = integration.get_user_assignments_range(
                     user_id=tech_id,
                     start_date=start_date,
                     end_date=end_date,
@@ -99,8 +179,15 @@ class BlueFolderService:
                 )
                 if assignments:
                     return [self._map_assignment_to_stop(a) for a in assignments]
-            except Exception:
-                pass
+        except Exception:
+            pass
+
+        try:
+            assignments = self._with_env_creds(api_key, account, _assignments_from_client)
+            if assignments:
+                return [self._map_assignment_to_stop(a) for a in assignments]
+        except Exception:
+            pass
 
         # Demo payload keeps the frontend and routing layers functional.
         return [
@@ -180,6 +267,9 @@ class BlueFolderService:
             or ("complete" if str(assignment.get("isComplete")).lower() in ("1", "true", "yes") else "scheduled")
         )
 
+        equipment = assignment.get("equipmentToService") or assignment.get("equipment") or assignment.get("equipment_type")
+        equipment_id = assignment.get("equipmentId") or assignment.get("equipment_id") or assignment.get("equipment_id_str") or None
+
         return asdict(
             Stop(
                 id=str(assignment.get("assignmentId") or assignment.get("serviceRequestId")),
@@ -194,5 +284,8 @@ class BlueFolderService:
                 service_request_id=assignment.get("serviceRequestId"),
                 subject=assignment.get("subject"),
                 status=status,
+                equipment=equipment,
+                equipment_type=assignment.get("equipment_type") or equipment,
+                equipment_id=str(equipment_id) if equipment_id is not None else None,
             )
         )

@@ -14,3 +14,6 @@ class Stop:
     service_request_id: Optional[str] = None
     subject: Optional[str] = None
     status: Optional[str] = None
+    equipment: Optional[str] = None
+    equipment_type: Optional[str] = None
+    equipment_id: Optional[str] = None

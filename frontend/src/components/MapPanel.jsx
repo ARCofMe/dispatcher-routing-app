@@ -1,13 +1,106 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, Marker, Polyline, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
 
-const containerStyle = { width: "100%", height: "400px", borderRadius: 8, overflow: "hidden", border: "1px solid #ddd" };
+const MAP_HEIGHT = 400;
+const containerStyle = {
+  width: "100%",
+  borderRadius: 8,
+  border: "1px solid #ddd",
+  background: "rgba(15,23,42,0.6)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  padding: 8,
+};
 
 const MAP_LIBRARIES = ["marker"];
 const MAP_ID = import.meta.env.VITE_GOOGLE_MAP_ID;
 const MAP_IDS = MAP_ID ? [MAP_ID] : [];
 
-export default function MapPanel({ stops = [], path = [], originAddress, destinationAddress, onRouteStats }) {
+const EQUIPMENT_META = {
+  rf: { label: "Refrigerator", bg: "#2563eb", marker: "blue" },
+  fr: { label: "Freezer", bg: "#7c3aed", marker: "purple" },
+  wt: { label: "Washer (Top)", bg: "#0d9488", marker: "green" },
+  wf: { label: "Washer (Front)", bg: "#06b6d4", marker: "ltblue" },
+  wdc: { label: "Washer/Dryer Combo", bg: "#f97316", marker: "orange" },
+  lc: { label: "Laundry Center", bg: "#f59e0b", marker: "yellow" },
+  dw: { label: "Dishwasher", bg: "#64748b", marker: "gray" },
+  eo: { label: "Electric Oven", bg: "#9333ea", marker: "purple" },
+  go: { label: "Gas Oven", bg: "#ef4444", marker: "red" },
+  dr: { label: "Electric Dryer", bg: "#22c55e", marker: "green" },
+  gdr: { label: "Gas Dryer", bg: "#16a34a", marker: "green" },
+  wo: { label: "Wall Oven", bg: "#8b5cf6", marker: "purple" },
+  im: { label: "Ice Maker", bg: "#0ea5e9", marker: "ltblue" },
+  tv: { label: "TV", bg: "#e11d48", marker: "pink" },
+  mw: { label: "Microwave", bg: "#a855f7", marker: "purple" },
+  otr: { label: "OTR Microwave", bg: "#f472b6", marker: "pink" },
+  ct: { label: "Cooktop", bg: "#fb7185", marker: "pink" },
+  other: { label: "Other", bg: "#475569", marker: "gray" },
+};
+
+const resolveEquip = (stop) => {
+  const codes = ["rf", "fr", "wt", "wf", "wdc", "lc", "dw", "eo", "go", "dr", "gdr", "wo", "im", "tv", "mw", "otr", "ct"];
+  const candidates = [];
+  const pushVal = (val) => {
+    if (!val) return;
+    if (Array.isArray(val)) {
+      val.forEach(pushVal);
+      return;
+    }
+    if (typeof val === "object") {
+      Object.values(val).forEach(pushVal);
+      return;
+    }
+    candidates.push(String(val));
+  };
+
+  pushVal(stop?.equipment_type);
+  pushVal(stop?.equipment);
+  pushVal(stop?.equipment_name);
+  pushVal(stop?.equipmentName);
+  pushVal(stop?.equipment_label);
+  pushVal(stop?.equipmentLabel);
+  pushVal(stop?.equipment_display);
+  pushVal(stop?.equipmentDisplay);
+  pushVal(stop?.equipmentToService);
+  pushVal(stop?.category);
+  pushVal(stop?.equipment_id);
+  pushVal(stop?.customer_name);
+  pushVal(stop?.subject);
+
+  const rawJoined = candidates.join(" | ");
+  const tokens = rawJoined
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+  // Exact token match only to avoid matching codes inside words (e.g., "freeport" -> "fr").
+  const found = tokens.find((t) => codes.includes(t));
+  if (found) return found;
+
+  // Allow tokens that start with a code followed by digits (e.g., "dr1") if present.
+  const starts = tokens.find((t) => codes.some((c) => t.startsWith(c)));
+  if (starts) {
+    const code = codes.find((c) => starts.startsWith(c));
+    if (code) return code;
+  }
+
+  return "other";
+};
+
+const DARK_MAP_STYLE = [
+  { elementType: "geometry", stylers: [{ color: "#1f2937" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#9ca3af" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#111827" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#111827" }] },
+  { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#1f2937" }] },
+  { featureType: "road", elementType: "labels.text.fill", stylers: [{ color: "#e5e7eb" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#0ea5e9" }] },
+  { featureType: "poi", stylers: [{ visibility: "off" }] },
+  { featureType: "transit", stylers: [{ visibility: "off" }] },
+];
+
+export default function MapPanel({ stops = [], path = [], originAddress, destinationAddress, onRouteStats, optimizeWaypoints = false, theme = "dark" }) {
   const [directions, setDirections] = useState(null);
   const [directionsError, setDirectionsError] = useState("");
   const [advSupported, setAdvSupported] = useState(false);
@@ -17,6 +110,7 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
   const [geoCache, setGeoCache] = useState({});
   const mapRef = useRef(null);
   const advMarkersRef = useRef([]);
+  const lastAdvSigRef = useRef("");
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     libraries: MAP_LIBRARIES,
@@ -50,11 +144,13 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
           const lat = s.lat ?? geoCache[s.id]?.lat;
           const lon = s.lon ?? geoCache[s.id]?.lng;
           if (lat == null || lon == null || Number.isNaN(Number(lat)) || Number.isNaN(Number(lon))) return null;
+          const equipment = resolveEquip(s);
           return {
             id: `${s.id}-${idx}`,
             position: { lat: Number(lat), lng: Number(lon) },
             label: `${idx + 1}`,
             title: `${idx + 1}. ${s.customer_name}`,
+            equipment,
           };
         })
         .filter(Boolean),
@@ -62,10 +158,14 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
   );
 
   const center = markers[0]?.position || { lat: 39.5, lng: -98.35 };
+  const hasEndpoints = Boolean(originAddress || destinationAddress);
 
   const pathLatLng = path
     .filter((p) => Array.isArray(p) && p.length === 2)
-    .map(([lat, lon]) => ({ lat: Number(lat), lng: Number(lon) }));
+    .map(([lat, lon]) => ({ lat: Number(lat), lng: Number(lon) }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && p.lat <= 90 && p.lat >= -90 && p.lng <= 180 && p.lng >= -180);
+  const startPos = pathLatLng[0];
+  const endPos = pathLatLng.length > 1 ? pathLatLng[pathLatLng.length - 1] : undefined;
 
   const missingStops = useMemo(
     () =>
@@ -78,6 +178,63 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
     [stops, geoCache]
   );
 
+  const mapOptions = useMemo(() => {
+    // When a mapId is provided, styling must come from the cloud console, so skip styles here.
+    const opts = MAP_ID ? {} : { styles: theme === "dark" ? DARK_MAP_STYLE : undefined };
+    return opts;
+  }, [theme]);
+
+  const advSignature = useMemo(() => {
+    const markerSig = markers
+      .map((m) => `${m.id}:${m.position.lat.toFixed(6)},${m.position.lng.toFixed(6)}:${m.equipment}`)
+      .join("|");
+    const startSig = startPos ? `S:${startPos.lat.toFixed(6)},${startPos.lng.toFixed(6)}` : "S:na";
+    const endSig = endPos ? `E:${endPos.lat.toFixed(6)},${endPos.lng.toFixed(6)}` : "E:na";
+    return `${markerSig}||${startSig}||${endSig}`;
+  }, [markers, startPos, endPos]);
+
+  const legendItems = useMemo(() => {
+    const seen = new Set();
+    markers.forEach((m) => seen.add(m.equipment || "other"));
+    return Array.from(seen)
+      .map((code) => ({ code, meta: EQUIPMENT_META[code] || EQUIPMENT_META.other }))
+      .sort((a, b) => a.meta.label.localeCompare(b.meta.label));
+  }, [markers]);
+
+  useEffect(() => {
+    if (!isLoaded || !mapReady || !(window.google && window.google.maps)) return;
+    if (pathLatLng.length < 2) {
+      setDirections(null);
+      return;
+    }
+    const svc = new window.google.maps.DirectionsService();
+    const origin = pathLatLng[0];
+    const destination = pathLatLng[pathLatLng.length - 1];
+    const waypoints = pathLatLng.slice(1, -1).map((loc) => ({ location: loc, stopover: true }));
+    svc.route(
+      {
+        origin,
+        destination,
+        waypoints,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        optimizeWaypoints: false, // honor backend/manual order
+      },
+      (result, status) => {
+        if (status === "OK" && result?.routes?.length) {
+          setDirections(result);
+          const legs = result.routes[0].legs || [];
+          const meters = legs.reduce((sum, leg) => sum + (leg.distance?.value || 0), 0);
+          const seconds = legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
+          onRouteStats?.({ distanceMiles: meters / 1609.344, durationMinutes: seconds / 60 });
+          setDirectionsError("");
+        } else {
+          setDirections(null);
+          setDirectionsError(status);
+        }
+      }
+    );
+  }, [isLoaded, mapReady, pathLatLng, onRouteStats]);
+
   const clearAdvMarkers = () => {
     advMarkersRef.current.forEach((mk) => {
       if (!mk) return;
@@ -88,6 +245,7 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
       }
     });
     advMarkersRef.current = [];
+    lastAdvSigRef.current = "";
   };
 
   useEffect(() => {
@@ -123,13 +281,21 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
           }
           return;
         }
+        if (lastAdvSigRef.current === advSignature) {
+          if (!cancelled) {
+            setAdvSupported(true);
+            setAdvCheckDone(true);
+          }
+          return;
+        }
         // Clear old markers
         clearAdvMarkers();
         if (markers.length) {
           markers.forEach((m) => {
+            const colors = EQUIPMENT_META[m.equipment] || EQUIPMENT_META.other;
             const pin = new PinElement({
               glyphText: m.label,
-              background: "#2563eb",
+              background: colors.bg,
               glyphColor: "#e2e8f0",
             });
             const adv = new AdvancedMarkerElement({
@@ -141,8 +307,40 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
             advMarkersRef.current.push(adv);
           });
         }
+        // Start / end markers with distinct colors when advanced markers are available
+        if (hasEndpoints && startPos) {
+          const startPin = new PinElement({
+            glyphText: "S",
+            background: "#16a34a",
+            glyphColor: "#f8fafc",
+          });
+          advMarkersRef.current.push(
+            new AdvancedMarkerElement({
+              position: startPos,
+              map: mapRef.current,
+              title: "Start",
+              content: startPin.element,
+            })
+          );
+        }
+        if (hasEndpoints && endPos) {
+          const endPin = new PinElement({
+            glyphText: "E",
+            background: "#ef4444",
+            glyphColor: "#f8fafc",
+          });
+          advMarkersRef.current.push(
+            new AdvancedMarkerElement({
+              position: endPos,
+              map: mapRef.current,
+              title: "End",
+              content: endPin.element,
+            })
+          );
+        }
         if (!cancelled) {
-          setAdvSupported(true);
+          lastAdvSigRef.current = advSignature;
+          setAdvSupported(advMarkersRef.current.length > 0);
           setAdvCheckDone(true);
         }
       } catch (e) {
@@ -155,47 +353,17 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
     renderMarkers();
     return () => {
       cancelled = true;
-      clearAdvMarkers();
-      setAdvSupported(false);
-      setAdvCheckDone(false);
     };
-  }, [markers, isLoaded, mapReady]);
+  }, [markers, isLoaded, mapReady, startPos, endPos, advSignature]);
 
   useEffect(() => {
-    setDirections(null);
+    return () => {
+      clearAdvMarkers();
+    };
+  }, []);
+
+  useEffect(() => {
     setDirectionsError("");
-    if (!isLoaded || markers.length < 2) return;
-    if (!(window.google && window.google.maps)) return;
-
-    const origin = originAddress?.trim() || markers[0].position;
-    const destination = destinationAddress?.trim() || markers[markers.length - 1].position;
-    const waypoints = markers.slice(1, -1).map((m) => ({ location: m.position, stopover: true }));
-
-    const service = new window.google.maps.DirectionsService();
-    service.route(
-      {
-        origin,
-        destination,
-        waypoints,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        avoidFerries: true,
-        optimizeWaypoints: false,
-      },
-      (result, status) => {
-        if (status === "OK") {
-          setDirections(result);
-          const legs = result.routes?.[0]?.legs || [];
-          const meters = legs.reduce((sum, leg) => sum + (leg.distance?.value || 0), 0);
-          if (onRouteStats && meters) {
-            onRouteStats({ routeMiles: (meters / 1609.344).toFixed(2) });
-          }
-        } else {
-          setDirections(null);
-          setDirectionsError(status || "Unable to build route");
-          console.warn("Directions request failed", status, { origin, destination, waypoints });
-        }
-      }
-    );
   }, [markers, isLoaded, originAddress, destinationAddress]);
 
   if (loadError) {
@@ -208,45 +376,87 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
 
   return (
     <div style={containerStyle}>
-      {directionsError && (
-        <div style={{ position: "absolute", zIndex: 2, margin: 8, padding: "6px 8px", background: "rgba(239,68,68,0.9)", color: "#fff", borderRadius: 8, border: "1px solid #b91c1c", fontSize: 12 }}>
-          Route unavailable ({directionsError}). Check addresses/origin/destination.
-        </div>
-      )}
-      {missingStops.length > 0 && (
-        <div style={{ position: "absolute", zIndex: 2, margin: 8, padding: "6px 8px", background: "rgba(15,23,42,0.9)", color: "#fbbf24", borderRadius: 8, border: "1px solid #f59e0b", fontSize: 12 }}>
-          {missingStops.length} stop(s) missing coordinates — check address or geocode limits.
-        </div>
-      )}
-      <GoogleMap
-        center={center}
-        zoom={10}
-        mapContainerStyle={{ width: "100%", height: "100%" }}
-        mapId={MAP_ID || undefined}
-        onLoad={(map) => {
-          mapRef.current = map;
-          if (MAP_ID) {
-            map.setOptions({ mapId: MAP_ID });
-            mapIdAppliedRef.current = !!map.get("mapId");
-          } else {
-            mapIdAppliedRef.current = false;
-          }
-          setMapReady(true);
-        }}
-      >
-        {advCheckDone && !advSupported &&
-          markers.map((m) => (
-            <Marker key={m.id} position={m.position} label={m.label} title={m.title} />
-          ))}
+      <div style={{ position: "relative", width: "100%", height: MAP_HEIGHT, borderRadius: 8, overflow: "hidden" }}>
+        {directionsError && (
+          <div style={{ position: "absolute", zIndex: 2, margin: 8, padding: "6px 8px", background: "rgba(239,68,68,0.9)", color: "#fff", borderRadius: 8, border: "1px solid #b91c1c", fontSize: 12 }}>
+            Route unavailable ({directionsError}). Check addresses/origin/destination.
+          </div>
+        )}
+        {missingStops.length > 0 && (
+          <div style={{ position: "absolute", zIndex: 2, margin: 8, padding: "6px 8px", background: "rgba(15,23,42,0.9)", color: "#fbbf24", borderRadius: 8, border: "1px solid #f59e0b", fontSize: 12 }}>
+            {missingStops.length} stop(s) missing coordinates — check address or geocode limits.
+          </div>
+        )}
+        <GoogleMap
+          center={center}
+          zoom={10}
+          mapContainerStyle={{ width: "100%", height: "100%" }}
+          mapId={MAP_ID || undefined}
+          options={mapOptions}
+          onLoad={(map) => {
+            mapRef.current = map;
+            if (MAP_ID) {
+              map.setOptions({ mapId: MAP_ID });
+              mapIdAppliedRef.current = !!map.get("mapId");
+            } else {
+              mapIdAppliedRef.current = false;
+            }
+            setMapReady(true);
+          }}
+        >
+        {(!advSupported || advMarkersRef.current.length === 0) && (
+          <>
+            {hasEndpoints && startPos && (
+              <Marker
+                position={startPos}
+                label="S"
+                title="Start"
+                icon={{ url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" }}
+              />
+            )}
+            {hasEndpoints && endPos && (
+              <Marker
+                position={endPos}
+                label="E"
+                title="End"
+                icon={{ url: "http://maps.google.com/mapfiles/ms/icons/red-dot.png" }}
+              />
+            )}
+            {advCheckDone &&
+              markers.map((m) => (
+                <Marker
+                  key={m.id}
+                  position={m.position}
+                  label={m.label}
+                  title={m.title}
+                  icon={{ url: `http://maps.google.com/mapfiles/ms/icons/${(EQUIPMENT_META[m.equipment]?.marker || "blue")}-dot.png` }}
+                />
+              ))}
+          </>
+        )}
         {directions ? (
           <DirectionsRenderer
             directions={directions}
-            options={{ suppressMarkers: true, polylineOptions: { strokeColor: "#2563eb", strokeWeight: 4, strokeOpacity: 0.8 } }}
+            options={{
+              suppressMarkers: true,
+              polylineOptions: { strokeColor: "#2563eb", strokeWeight: 5, strokeOpacity: 0.85 },
+            }}
           />
         ) : (
           pathLatLng.length > 1 && <Polyline path={pathLatLng} options={{ strokeColor: "#2563eb", strokeWeight: 4, strokeOpacity: 0.8 }} />
         )}
-      </GoogleMap>
+        </GoogleMap>
+      </div>
+      {legendItems.length > 0 && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", padding: "6px 8px", borderRadius: 8, background: "rgba(15,23,42,0.75)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.3)", fontSize: 11 }}>
+          {legendItems.map(({ code, meta }) => (
+            <div key={code} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 999, background: meta.bg }} />
+              <span>{meta.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

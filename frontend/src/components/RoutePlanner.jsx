@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchRoutePreview, simulateRoute, commitRoute } from "../api/client";
 import StopList from "./StopList";
 import MetricsPanel from "./MetricsPanel";
 import MapPanel from "./MapPanel";
 import TimelinePanel from "./TimelinePanel";
 
-export default function RoutePlanner({ techId }) {
+export default function RoutePlanner({ techId, theme }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [route, setRoute] = useState(null);
   const [originAddress, setOriginAddress] = useState("");
@@ -21,16 +21,44 @@ export default function RoutePlanner({ techId }) {
   const draftKey = useMemo(() => `route-draft-${techId}-${date}`, [techId, date]);
   const cacheKey = useMemo(() => `route-cache-${techId}-${date}`, [techId, date]);
   const [validation, setValidation] = useState({ late: 0 });
+  const [optimizeWaypoints, setOptimizeWaypoints] = useState(true);
+  const clientIdMapRef = useRef(new Map());
+
+  const ensureClientIds = (stops = []) => {
+    return stops.map((s) => {
+      const key = s.id || s.service_request_id || s.address || `${s.lat}-${s.lon}`;
+      if (!clientIdMapRef.current.has(key)) {
+        clientIdMapRef.current.set(key, crypto.randomUUID());
+      }
+      const clientId = clientIdMapRef.current.get(key);
+      return s.__clientId ? s : { ...s, __clientId: clientId };
+    });
+  };
+  const attachClientIdsToRoute = (r) => (r ? { ...r, stops: ensureClientIds(r.stops || []) } : r);
+  useEffect(() => {
+    try {
+      window.__LAST_ROUTE_STOPS__ = route?.stops || [];
+    } catch {}
+  }, [route]);
 
   const load = async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await fetchRoutePreview(techId, date, originAddress || undefined, destinationAddress || undefined);
-      setRoute(data);
+      const data = await fetchRoutePreview(
+        techId,
+        date,
+        originAddress || undefined,
+        destinationAddress || undefined,
+        optimizeWaypoints || undefined
+      );
+      setRoute(attachClientIdsToRoute(data));
       setPrevMetrics(data?.metrics || null);
       setRouteStats({ waypointMiles: data?.metrics?.total_distance_miles });
       setStatus("Preview loaded");
+      try {
+        window.__LAST_ROUTE_STOPS__ = data?.stops || [];
+      } catch {}
       localStorage.setItem(
         cacheKey,
         JSON.stringify({ route: data, originAddress, destinationAddress })
@@ -40,11 +68,14 @@ export default function RoutePlanner({ techId }) {
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
-          setRoute(parsed.route);
+          setRoute(attachClientIdsToRoute(parsed.route));
           setOriginAddress(parsed.originAddress || "");
           setDestinationAddress(parsed.destinationAddress || "");
           setRouteStats({ waypointMiles: parsed.route?.metrics?.total_distance_miles });
           setStatus("Loaded cached route");
+          try {
+            window.__LAST_ROUTE_STOPS__ = parsed.route?.stops || [];
+          } catch {}
         } catch {
           setError("Failed to load preview");
         }
@@ -58,24 +89,35 @@ export default function RoutePlanner({ techId }) {
 
   const handleReorder = async (stops) => {
     if (!stops || stops.length === 0) return;
-    const manual_order = stops.map((s) => s.id);
-    setRoute((prev) => (prev ? { ...prev, stops } : { stops, metrics: null }));
+    // A manual drag/drop should lock in the chosen order; disable auto-optimization for this update.
+    setOptimizeWaypoints(false);
+    const withIds = ensureClientIds(stops);
+    const manual_order = withIds.map((s) => s.id);
+    setRoute((prev) => (prev ? { ...prev, stops: withIds } : { stops: withIds, metrics: null }));
+    try {
+      window.__LAST_ROUTE_STOPS__ = withIds;
+    } catch {}
     try {
       if (route?.metrics) setPrevMetrics(route.metrics);
       const updated = await simulateRoute({
-        existing_assignments: stops,
+        existing_assignments: withIds,
         added_stops: [],
         removed_ids: [],
         manual_order,
         origin: originAddress || undefined,
         destination: destinationAddress || undefined,
+        optimize: false,
       });
-      setRoute(updated);
+      const updatedWithIds = attachClientIdsToRoute(updated);
+      setRoute(updatedWithIds);
       setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
       setStatus("Simulation updated");
+      try {
+        window.__LAST_ROUTE_STOPS__ = updatedWithIds?.stops || [];
+      } catch {}
       localStorage.setItem(
         cacheKey,
-        JSON.stringify({ route: updated, originAddress, destinationAddress })
+        JSON.stringify({ route: updatedWithIds, originAddress, destinationAddress })
       );
     } catch (err) {
       setError("Unable to simulate route");
@@ -148,7 +190,7 @@ export default function RoutePlanner({ techId }) {
         origin: originAddress || undefined,
         destination: destinationAddress || undefined,
       });
-      setRoute(updated);
+      setRoute(attachClientIdsToRoute(updated));
       setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
       setStatus("Stop updated");
       localStorage.setItem(
@@ -177,7 +219,7 @@ export default function RoutePlanner({ techId }) {
     }
     try {
       const data = JSON.parse(raw);
-      setRoute(data.route);
+      setRoute(attachClientIdsToRoute(data.route));
       setOriginAddress(data.originAddress || "");
       setDestinationAddress(data.destinationAddress || "");
       setRouteStats({ waypointMiles: data.route?.metrics?.total_distance_miles });
@@ -276,7 +318,15 @@ export default function RoutePlanner({ techId }) {
             style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
           />
         </label>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#cbd5e1", whiteSpace: "nowrap" }}>
+            <input
+              type="checkbox"
+              checked={optimizeWaypoints}
+              onChange={(e) => setOptimizeWaypoints(e.target.checked)}
+            />
+            Optimize stops
+          </label>
           <button
             onClick={load}
             disabled={loading}
@@ -294,21 +344,22 @@ export default function RoutePlanner({ techId }) {
           </button>
           <button
             onClick={commit}
-            disabled={!route || loading}
+            disabled
+            title="Commit disabled for now"
             style={{
               padding: "10px 14px",
               borderRadius: 10,
-              border: "1px solid #10b981",
-              background: "#059669",
-              color: "#e2e8f0",
-              cursor: route ? "pointer" : "not-allowed",
+              border: "1px solid #475569",
+              background: "rgba(51,65,85,0.4)",
+              color: "#94a3b8",
+              cursor: "not-allowed",
               minWidth: 90,
             }}
           >
-            Commit
+            Commit (disabled)
           </button>
         </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, color: "#cbd5e1", fontSize: 13 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, color: "#cbd5e1", fontSize: 13, minHeight: 20, flexWrap: "wrap" }}>
           {status && <span style={{ color: "#34d399" }}>{status}</span>}
           {error && <span style={{ color: "#f87171" }}>{error}</span>}
         </div>
@@ -395,40 +446,55 @@ export default function RoutePlanner({ techId }) {
             <div style={{ marginTop: 10, padding: 12, borderRadius: 12, border: "1px solid #334155", background: "rgba(30,41,59,0.6)" }}>
               <div style={{ color: "#cbd5e1", marginBottom: 8, fontSize: 13 }}>Add ad-hoc stop</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <input
-                  type="text"
-                  placeholder="Customer / label"
-                  value={newStop.name}
-                  onChange={(e) => setNewStop((p) => ({ ...p, name: e.target.value }))}
-                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
-                />
-                <input
-                  type="text"
-                  placeholder="Address"
-                  value={newStop.address}
-                  onChange={(e) => setNewStop((p) => ({ ...p, address: e.target.value }))}
-                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
-                />
-                <input
-                  type="number"
-                  placeholder="Duration (mins)"
-                  value={newStop.duration_minutes}
-                  onChange={(e) => setNewStop((p) => ({ ...p, duration_minutes: Number(e.target.value) || 0 }))}
-                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
-                />
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
+                  Customer / label
+                  <input
+                    type="text"
+                    placeholder="e.g. Contoso Bakery"
+                    value={newStop.name}
+                    onChange={(e) => setNewStop((p) => ({ ...p, name: e.target.value }))}
+                    style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
+                  Address
+                  <input
+                    type="text"
+                    placeholder="Street, city, state"
+                    value={newStop.address}
+                    onChange={(e) => setNewStop((p) => ({ ...p, address: e.target.value }))}
+                    style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
+                  On-site minutes
+                  <input
+                    type="number"
+                    placeholder="30"
+                    value={newStop.duration_minutes}
+                    onChange={(e) => setNewStop((p) => ({ ...p, duration_minutes: Number(e.target.value) || 0 }))}
+                    style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                  />
+                </label>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    type="time"
-                    value={newStop.window_start}
-                    onChange={(e) => setNewStop((p) => ({ ...p, window_start: e.target.value }))}
-                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
-                  />
-                  <input
-                    type="time"
-                    value={newStop.window_end}
-                    onChange={(e) => setNewStop((p) => ({ ...p, window_end: e.target.value }))}
-                    style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
-                  />
+                  <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
+                    Window start
+                    <input
+                      type="time"
+                      value={newStop.window_start}
+                      onChange={(e) => setNewStop((p) => ({ ...p, window_start: e.target.value }))}
+                      style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                    />
+                  </label>
+                  <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, color: "#cbd5e1", fontSize: 12 }}>
+                    Window end
+                    <input
+                      type="time"
+                      value={newStop.window_end}
+                      onChange={(e) => setNewStop((p) => ({ ...p, window_end: e.target.value }))}
+                      style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
+                    />
+                  </label>
                 </div>
               </div>
               <div style={{ marginTop: 8 }}>
@@ -444,7 +510,7 @@ export default function RoutePlanner({ techId }) {
                       window_end: newStop.window_end || undefined,
                     };
                     const updatedStops = [...(route?.stops || []), stop];
-                    setRoute((prev) => (prev ? { ...prev, stops: updatedStops } : { stops: updatedStops, metrics: prev?.metrics }));
+                    setRoute((prev) => (prev ? { ...prev, stops: ensureClientIds(updatedStops) } : { stops: ensureClientIds(updatedStops), metrics: prev?.metrics }));
                     setPrevMetrics(route?.metrics || null);
                     try {
                       const updated = await simulateRoute({
@@ -455,7 +521,7 @@ export default function RoutePlanner({ techId }) {
                         origin: originAddress || undefined,
                         destination: destinationAddress || undefined,
                       });
-                      setRoute(updated);
+                      setRoute(attachClientIdsToRoute(updated));
                       setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
                       setStatus("Ad-hoc stop added");
                       localStorage.setItem(
@@ -487,6 +553,7 @@ export default function RoutePlanner({ techId }) {
               originAddress={originAddress || undefined}
               destinationAddress={destinationAddress || undefined}
               onRouteStats={(stats) => setRouteStats((prev) => ({ ...prev, ...stats }))}
+              optimizeWaypoints={optimizeWaypoints}
             />
             <MetricsPanel metrics={route.metrics} routeStats={routeStats} prevMetrics={prevMetrics} legs={legs} />
             <TimelinePanel stops={route.stops} />
