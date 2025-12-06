@@ -6,10 +6,12 @@ Full-stack tool for dispatchers to preview, reorder, simulate, and commit daily 
 - Technician selection with daily route preview.
 - Drag-and-drop stop ordering with status badges and inline edits (window/duration).
 - Ad-hoc stop entry and live resimulation.
-- Metrics with deltas (miles/time), ETA, and origin/destination legs.
+- Metrics with deltas (miles/time), ETA, origin/destination legs, and travel shown in hours/mins.
 - Google Maps directions + shareable route link.
 - Hide completed stops; service request context with “Open in BlueFolder”.
 - Draft save/load per tech/date (local storage).
+- Equipment-colored markers and compact legend.
+- Default on-site duration is 60 minutes (ad-hoc and BlueFolder import).
 
 ## Project Structure
 - `backend/` – Flask API, BlueFolder/routing integration stubs.
@@ -80,8 +82,8 @@ To stop, close the PowerShell window (Ctrl+C). Re-run the script later to restar
 
 ## Notes on Integration
 - BlueFolder: `bluefolder_service.py` pulls techs/assignments via `BlueFolderIntegration`; map `_map_assignment_to_stop` to include duration/window/lat/lon when available. Status defaults to `pending`.
-- Routing: `routing_service.py` currently uses Haversine + geopy for metrics and honors manual order; plug in optimized-routing-extension for true optimization (replace `_optimize_order` and metrics as needed).
-- Commit endpoint is stubbed; wire to BlueFolder assignment ordering when available.
+- Routing: `routing_service.py` geocodes, optimizes (windows + nearest-neighbor + Directions when available), anchors origin/destination, and computes metrics. Manual order still respected when provided.
+- Commit endpoint is stubbed/unused in the UI; wire to BlueFolder assignment ordering if you need write-back.
 
 ## Usage
 1. Start backend and frontend.
