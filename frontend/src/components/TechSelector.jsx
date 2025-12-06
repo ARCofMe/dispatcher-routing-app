@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchTechs, getBlueFolderCredentials, setBlueFolderCredentials } from "../api/client";
 
-export default function TechSelector({ value, onChange }) {
+export default function TechSelector({ value, onChange, onTechNameChange }) {
   const initialCreds = getBlueFolderCredentials();
   const [techs, setTechs] = useState([]);
   const [error, setError] = useState("");
@@ -76,7 +76,14 @@ export default function TechSelector({ value, onChange }) {
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       <select
         value={value || ""}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => {
+          const id = Number(e.target.value);
+          onChange(id);
+          if (onTechNameChange) {
+            const found = techs.find((t) => Number(t.id) === id);
+            onTechNameChange(found ? found.name : "");
+          }
+        }}
         disabled={loading || techs.length === 0}
         style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #475569", background: "rgba(51,65,85,0.5)", color: "#e2e8f0" }}
       >

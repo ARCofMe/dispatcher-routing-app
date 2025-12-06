@@ -1,9 +1,11 @@
 import { useState } from "react";
 import TechSelector from "./components/TechSelector";
+import BrandHeader from "./components/BrandHeader";
 import RoutePlanner from "./components/RoutePlanner";
 
 export default function App() {
   const [techId, setTechId] = useState(null);
+  const [techName, setTechName] = useState("");
   const [theme, setTheme] = useState("dark");
 
   const isDark = theme === "dark";
@@ -29,14 +31,11 @@ export default function App() {
   return (
     <div style={pageStyle}>
       <div style={shellStyle}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: 1.5, color: isDark ? "#94a3b8" : "#475569" }}>Dispatcher Routing</div>
-            <h1 style={{ margin: "4px 0 0", fontSize: 28, color: isDark ? "#e2e8f0" : "#0f172a" }}>Daily Route Planner</h1>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <BrandHeader techName={techName} date={null} theme={theme} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, color: isDark ? "#94a3b8" : "#475569" }}>Technician</span>
-            <TechSelector value={techId} onChange={setTechId} />
+            <TechSelector value={techId} onChange={setTechId} onTechNameChange={setTechName} />
             <button
               onClick={() => setTheme(isDark ? "light" : "dark")}
               style={{
