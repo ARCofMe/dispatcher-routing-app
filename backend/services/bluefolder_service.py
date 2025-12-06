@@ -275,7 +275,7 @@ class BlueFolderService:
                 id=str(assignment.get("assignmentId") or assignment.get("serviceRequestId")),
                 address=address,
                 customer_name=assignment.get("subject") or "Service Request",
-                duration_minutes=30,
+                duration_minutes=60,
                 window_start=window_start,
                 window_end=window_end,
                 lat=assignment.get("lat"),

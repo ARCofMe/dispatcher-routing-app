@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchRoutePreview, simulateRoute, commitRoute } from "../api/client";
+import { fetchRoutePreview, simulateRoute } from "../api/client";
 import StopList from "./StopList";
 import MetricsPanel from "./MetricsPanel";
 import MapPanel from "./MapPanel";
@@ -17,7 +17,7 @@ export default function RoutePlanner({ techId, theme }) {
   const [shareStatus, setShareStatus] = useState("");
   const [hideCompleted, setHideCompleted] = useState(false);
   const [prevMetrics, setPrevMetrics] = useState(null);
-  const [newStop, setNewStop] = useState({ name: "", address: "", duration_minutes: 30, window_start: "", window_end: "" });
+  const [newStop, setNewStop] = useState({ name: "", address: "", duration_minutes: 60, window_start: "", window_end: "" });
   const draftKey = useMemo(() => `route-draft-${techId}-${date}`, [techId, date]);
   const cacheKey = useMemo(() => `route-cache-${techId}-${date}`, [techId, date]);
   const [validation, setValidation] = useState({ late: 0 });
@@ -121,27 +121,6 @@ export default function RoutePlanner({ techId, theme }) {
       );
     } catch (err) {
       setError("Unable to simulate route");
-    }
-  };
-
-  const commit = async () => {
-    if (!route) return;
-    setLoading(true);
-    setError("");
-    try {
-      await commitRoute({
-        tech_id: techId,
-        date,
-        manual_order: route.stops.map((s) => s.id),
-        ordered_stops: route.stops,
-        origin: originAddress || undefined,
-        destination: destinationAddress || undefined,
-      });
-      setStatus("Route committed to BlueFolder");
-    } catch (err) {
-      setError("Commit failed");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -342,22 +321,6 @@ export default function RoutePlanner({ techId, theme }) {
           >
             {loading ? "Loading…" : "Load"}
           </button>
-          <button
-            onClick={commit}
-            disabled
-            title="Commit disabled for now"
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #475569",
-              background: "rgba(51,65,85,0.4)",
-              color: "#94a3b8",
-              cursor: "not-allowed",
-              minWidth: 90,
-            }}
-          >
-            Commit (disabled)
-          </button>
         </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, color: "#cbd5e1", fontSize: 13, minHeight: 20, flexWrap: "wrap" }}>
           {status && <span style={{ color: "#34d399" }}>{status}</span>}
@@ -374,24 +337,6 @@ export default function RoutePlanner({ techId, theme }) {
                   <input type="checkbox" checked={hideCompleted} onChange={(e) => setHideCompleted(e.target.checked)} />
                   Hide completed
                 </label>
-                <button
-                  onClick={() => {
-                    if (!validation.suggested) return;
-                    handleReorder(validation.suggested);
-                    setStatus("Suggested order applied");
-                  }}
-                  style={{
-                    padding: "6px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #475569",
-                    background: "rgba(51,65,85,0.6)",
-                    color: "#e2e8f0",
-                    cursor: "pointer",
-                    fontSize: 12,
-                  }}
-                >
-                  Suggest by window
-                </button>
                 <button
                   onClick={saveDraft}
                   style={{
