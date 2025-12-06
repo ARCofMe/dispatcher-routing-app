@@ -5,8 +5,16 @@ import MetricsPanel from "./MetricsPanel";
 import MapPanel from "./MapPanel";
 import TimelinePanel from "./TimelinePanel";
 
-export default function RoutePlanner({ techId, theme }) {
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+const getLocalISODate = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+export default function RoutePlanner({ techId, theme, onDateChange, dateValue }) {
+  const [date, setDate] = useState(() => dateValue || getLocalISODate());
   const [route, setRoute] = useState(null);
   const [originAddress, setOriginAddress] = useState("");
   const [destinationAddress, setDestinationAddress] = useState("");
@@ -23,6 +31,12 @@ export default function RoutePlanner({ techId, theme }) {
   const [validation, setValidation] = useState({ late: 0 });
   const [optimizeWaypoints, setOptimizeWaypoints] = useState(true);
   const clientIdMapRef = useRef(new Map());
+
+  useEffect(() => {
+    if (dateValue && dateValue !== date) {
+      setDate(dateValue);
+    }
+  }, [dateValue]);
 
   const ensureClientIds = (stops = []) => {
     return stops.map((s) => {
@@ -273,7 +287,10 @@ export default function RoutePlanner({ techId, theme }) {
           <input
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => {
+              setDate(e.target.value);
+              onDateChange?.(e.target.value);
+            }}
             style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0" }}
           />
         </label>

@@ -9,6 +9,20 @@ export default function BrandHeader({ techName, date, theme = "dark" }) {
   const subColor = isDark ? "#cbd5e1" : "#1f2937";
   const cardBg = isDark ? BG : "#f8fafc";
   const border = isDark ? "1px solid rgba(148,163,184,0.25)" : "1px solid rgba(15,23,42,0.08)";
+  const formatDate = (d) => {
+    if (!d) return "—";
+    // Avoid timezone shifts: parse plain YYYY-MM-DD if provided.
+    if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      const [y, m, day] = d.split("-");
+      return `${m}/${day}/${y}`;
+    }
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return d;
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    const yyyy = dt.getFullYear();
+    return `${mm}/${dd}/${yyyy}`;
+  };
 
   return (
     <div
@@ -41,7 +55,7 @@ export default function BrandHeader({ techName, date, theme = "dark" }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <div style={{ color: textColor, fontWeight: 700, fontSize: 16, letterSpacing: "0.01em" }}>Appliance Repair Center</div>
         <div style={{ color: subColor, fontSize: 12 }}>
-          {techName ? `Tech: ${techName}` : "Tech: —"} • {date || "—"}
+          {techName ? `Tech: ${techName}` : "Tech: —"} • {formatDate(date)}
         </div>
       </div>
     </div>

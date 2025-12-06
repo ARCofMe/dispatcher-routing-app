@@ -7,6 +7,14 @@ export default function App() {
   const [techId, setTechId] = useState(null);
   const [techName, setTechName] = useState("");
   const [theme, setTheme] = useState("dark");
+  const getLocalISODate = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
+  const [selectedDate, setSelectedDate] = useState(() => getLocalISODate());
 
   const isDark = theme === "dark";
   const pageStyle = {
@@ -25,14 +33,14 @@ export default function App() {
     boxShadow: "0 30px 80px rgba(0,0,0,0.15)",
     borderRadius: 18,
     padding: 24,
-    backdropFilter: "blur(6px)",
-  };
+        backdropFilter: "blur(6px)",
+      };
 
   return (
     <div style={pageStyle}>
       <div style={shellStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <BrandHeader techName={techName} date={null} theme={theme} />
+          <BrandHeader techName={techName} date={selectedDate} theme={theme} />
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, color: isDark ? "#94a3b8" : "#475569" }}>Technician</span>
             <TechSelector value={techId} onChange={setTechId} onTechNameChange={setTechName} />
@@ -54,7 +62,7 @@ export default function App() {
         </div>
         <div style={{ marginTop: 18 }}>
           {techId ? (
-            <RoutePlanner techId={techId} theme={theme} />
+            <RoutePlanner techId={techId} theme={theme} onDateChange={setSelectedDate} dateValue={selectedDate} />
           ) : (
             <div style={{ color: isDark ? "#cbd5e1" : "#475569", fontSize: 15 }}>Select a technician to load their route.</div>
           )}
