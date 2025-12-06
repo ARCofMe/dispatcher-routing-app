@@ -28,6 +28,7 @@ class RoutingService:
         self._geocoder = self._init_geocoder()
         self._geocode_cache = self._init_cache()
         self._logger = None
+        self._osrm_url = os.getenv("OSRM_URL")
 
     def _log(self, event: str, data: dict):
         try:
@@ -309,6 +310,63 @@ class RoutingService:
 
         return [stops[i] for i in best_order] if best_order else []
 
+    def _osrm_route(self, stops: Sequence[dict], origin: str = None, destination: str = None):
+        import requests
+
+        if not self._osrm_url:
+            return None
+
+        coords = []
+        if origin:
+            geocoded = self._geocode(origin)
+            if geocoded:
+                coords.append(f"{geocoded[1]},{geocoded[0]}")
+        for s in stops:
+            lat = s.get("lat")
+            lon = s.get("lon")
+            if lat is None or lon is None:
+                return None
+            coords.append(f"{lon},{lat}")
+        if destination:
+            geocoded = self._geocode(destination)
+            if geocoded:
+                coords.append(f"{geocoded[1]},{geocoded[0]}")
+
+        if len(coords) < 2:
+            return None
+        url = f"{self._osrm_url.rstrip('/')}/route/v1/driving/" + ";".join(coords)
+        params = {"overview": "full", "geometries": "geojson", "steps": "false"}
+        resp = requests.get(url, params=params, timeout=5)
+        data = resp.json()
+        if data.get("code") != "Ok":
+            return None
+        route = data["routes"][0]
+        geometry = route.get("geometry", {}).get("coordinates")
+        if not geometry:
+            return None
+        # geometry is [lon, lat]
+        return [[lat, lon] for lon, lat in geometry]
+
+    def _osrm_metrics(self, path: Sequence[Sequence[float]]):
+        if not self._osrm_url or len(path) < 2:
+            return None
+        import requests
+
+        coords = [f"{lon},{lat}" for lat, lon in path]
+        url = f"{self._osrm_url.rstrip('/')}/route/v1/driving/" + ";".join(coords)
+        params = {"overview": "false", "steps": "false", "annotations": "false"}
+        resp = requests.get(url, params=params, timeout=5)
+        data = resp.json()
+        if data.get("code") != "Ok":
+            return None
+        route = data["routes"][0]
+        dist_m = route.get("distance", 0)
+        dur_s = route.get("duration", 0)
+        return {
+            "distance_km": dist_m / 1000.0,
+            "travel_minutes": dur_s / 60.0,
+        }
+
     def _ensure_coordinates(self, stops: List[dict]) -> List[dict]:
         """
         Populate lat/lon for stops missing coordinates using geopy (Nominatim) with a small cache.
@@ -379,6 +437,15 @@ class RoutingService:
         return sorted(stops, key=lambda s: order_lookup.get(str(s.get("id")), len(manual_order)))
 
     def _build_path(self, stops: Sequence[dict], origin: str = None, destination: str = None):
+        # If OSRM_URL is set, attempt to fetch a routed path.
+        if self._osrm_url and len(stops) >= 2:
+            try:
+                path = self._osrm_route(stops, origin=origin, destination=destination)
+                if path:
+                    return path
+            except Exception:
+                pass
+
         coords = []
         # Optionally geocode origin/destination into the path so distance includes them.
         if origin:
@@ -400,10 +467,26 @@ class RoutingService:
         total_distance_km = 0.0
         total_travel_minutes = 0.0
         path = self._build_path(stops, origin=origin, destination=destination)
-        for i in range(1, len(path)):
-            segment_km = self._haversine(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0])
-            total_distance_km += segment_km
-            total_travel_minutes += (segment_km / self.AVERAGE_SPEED_KMH) * 60
+
+        # If OSRM distance/duration is available, prefer it.
+        if self._osrm_url and len(path) > 1:
+            try:
+                osrm_metrics = self._osrm_metrics(path)
+                if osrm_metrics:
+                    total_distance_km = osrm_metrics["distance_km"]
+                    total_travel_minutes = osrm_metrics["travel_minutes"]
+                else:
+                    raise ValueError("no osrm metrics")
+            except Exception:
+                for i in range(1, len(path)):
+                    segment_km = self._haversine(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0])
+                    total_distance_km += segment_km
+                    total_travel_minutes += (segment_km / self.AVERAGE_SPEED_KMH) * 60
+        else:
+            for i in range(1, len(path)):
+                segment_km = self._haversine(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0])
+                total_distance_km += segment_km
+                total_travel_minutes += (segment_km / self.AVERAGE_SPEED_KMH) * 60
 
         eta_start = datetime.combine(datetime.today(), self.START_TIME)
         eta_cursor = eta_start

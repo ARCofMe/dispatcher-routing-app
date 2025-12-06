@@ -35,6 +35,8 @@ VITE_GOOGLE_MAP_ID=your_map_id
 VITE_BLUEFOLDER_ACCOUNT_NAME=your_subdomain
 # Optional: disable frontend Directions calls to avoid Google API charges
 # VITE_DISABLE_DIRECTIONS=true
+# Optional: use Leaflet + OSM tiles instead of Google Maps
+# VITE_USE_LEAFLET=true
 ```
 
 Backend env (place in `backend/.env` or shell):
@@ -48,6 +50,8 @@ DEBUG=1
 # DISABLE_GMAPS_DIRECTIONS=true
 # Optional: change default on-site minutes (fallback when BF doesn't provide)
 # DEFAULT_DURATION_MINUTES=60
+# Optional: self-hosted OSRM routing
+# OSRM_URL=http://localhost:5000  # replace with your osrm-backend URL
 ```
 
 ## Setup

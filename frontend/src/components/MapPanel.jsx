@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, Marker, Polyline, DirectionsRenderer, useJsApiLoader } from "@react-google-maps/api";
+import { MapContainer, TileLayer, Marker as LeafletMarker, Polyline as LeafletPolyline, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 const MAP_HEIGHT = 400;
 const containerStyle = {
@@ -17,6 +20,7 @@ const MAP_LIBRARIES = ["marker"];
 const MAP_ID = import.meta.env.VITE_GOOGLE_MAP_ID;
 const MAP_IDS = MAP_ID ? [MAP_ID] : [];
 const DISABLE_DIRECTIONS = String(import.meta.env.VITE_DISABLE_DIRECTIONS || "").toLowerCase() === "true";
+const USE_LEAFLET = String(import.meta.env.VITE_USE_LEAFLET || "").toLowerCase() === "true";
 
 const EQUIPMENT_META = {
   rf: { label: "Refrigerator", bg: "#2563eb", marker: "blue" },
@@ -88,6 +92,37 @@ const resolveEquip = (stop) => {
 
   return "other";
 };
+
+const buildIcon = (label, color) =>
+  L.divIcon({
+    className: "",
+    html: `<div style="
+      background:${color};
+      color:#f8fafc;
+      width:26px;
+      height:26px;
+      border-radius:12px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:12px;
+      font-weight:700;
+      border:1px solid rgba(15,23,42,0.15);
+      box-shadow:0 2px 6px rgba(0,0,0,0.25);
+    ">${label}</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+  });
+
+function FitBounds({ markers }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map || !markers?.length) return;
+    const bounds = L.latLngBounds(markers.map((m) => m.position));
+    map.fitBounds(bounds, { padding: [40, 40] });
+  }, [map, markers]);
+  return null;
+}
 
 const DARK_MAP_STYLE = [
   { elementType: "geometry", stylers: [{ color: "#1f2937" }] },
@@ -359,6 +394,35 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
 
   if (!isLoaded) {
     return <div style={{ height: 400, border: "1px solid #ddd", borderRadius: 8 }}>Loading map…</div>;
+  }
+
+  if (USE_LEAFLET) {
+    const finishIcon = buildIcon("F", "#ef4444");
+    return (
+      <div style={containerStyle}>
+        <div style={{ position: "relative", width: "100%", height: MAP_HEIGHT, borderRadius: 8, overflow: "hidden" }}>
+          <MapContainer center={center} zoom={10} style={{ width: "100%", height: "100%" }}>
+            <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <FitBounds markers={markers} />
+            {markers.map((m) => (
+              <LeafletMarker key={m.id} position={m.position} icon={buildIcon(m.label, EQUIPMENT_META[m.equipment]?.bg || "#2563eb")} />
+            ))}
+            {hasEndpoints && endPos && <LeafletMarker position={endPos} icon={finishIcon} />}
+            {pathLatLng.length > 1 && <LeafletPolyline positions={pathLatLng} pathOptions={{ color: "#2563eb", weight: 4, opacity: 0.85 }} />}
+          </MapContainer>
+        </div>
+        {legendItems.length > 0 && (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", padding: "6px 8px", borderRadius: 8, background: "rgba(15,23,42,0.75)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.3)", fontSize: 11 }}>
+            {legendItems.map(({ code, meta }) => (
+              <div key={code} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 999, background: meta.bg }} />
+                <span>{meta.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
