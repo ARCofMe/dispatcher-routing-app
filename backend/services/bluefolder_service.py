@@ -32,6 +32,11 @@ class BlueFolderService:
     def __init__(self):
         _maybe_extend_sys_path()
         self._integration = self._init_integration()
+        default_duration = os.getenv("DEFAULT_DURATION_MINUTES")
+        try:
+            self.default_duration = int(default_duration) if default_duration else 60
+        except Exception:
+            self.default_duration = 60
 
     def _integration_with_credentials(self, api_key: Optional[str], account: Optional[str]):
         if not api_key or not account:
@@ -275,7 +280,7 @@ class BlueFolderService:
                 id=str(assignment.get("assignmentId") or assignment.get("serviceRequestId")),
                 address=address,
                 customer_name=assignment.get("subject") or "Service Request",
-                duration_minutes=60,
+                duration_minutes=self.default_duration,
                 window_start=window_start,
                 window_end=window_end,
                 lat=assignment.get("lat"),

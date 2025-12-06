@@ -33,6 +33,8 @@ Copy `frontend/.env.example` to `frontend/.env` and fill:
 VITE_GOOGLE_MAPS_API_KEY=your_key
 VITE_GOOGLE_MAP_ID=your_map_id
 VITE_BLUEFOLDER_ACCOUNT_NAME=your_subdomain
+# Optional: disable frontend Directions calls to avoid Google API charges
+# VITE_DISABLE_DIRECTIONS=true
 ```
 
 Backend env (place in `backend/.env` or shell):
@@ -42,6 +44,10 @@ BLUEFOLDER_ACCOUNT_NAME=your_subdomain
 BLUEFOLDER_API_PATH=/path/to/bluefolder-api        # optional override
 ROUTING_EXTENSION_PATH=/path/to/optimized-routing-extension
 DEBUG=1
+# Optional: disable Google Directions on backend to avoid charges
+# DISABLE_GMAPS_DIRECTIONS=true
+# Optional: change default on-site minutes (fallback when BF doesn't provide)
+# DEFAULT_DURATION_MINUTES=60
 ```
 
 ## Setup

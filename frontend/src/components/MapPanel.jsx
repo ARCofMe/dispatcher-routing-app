@@ -16,6 +16,7 @@ const containerStyle = {
 const MAP_LIBRARIES = ["marker"];
 const MAP_ID = import.meta.env.VITE_GOOGLE_MAP_ID;
 const MAP_IDS = MAP_ID ? [MAP_ID] : [];
+const DISABLE_DIRECTIONS = String(import.meta.env.VITE_DISABLE_DIRECTIONS || "").toLowerCase() === "true";
 
 const EQUIPMENT_META = {
   rf: { label: "Refrigerator", bg: "#2563eb", marker: "blue" },
@@ -203,8 +204,9 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
 
   useEffect(() => {
     if (!isLoaded || !mapReady || !(window.google && window.google.maps)) return;
-    if (pathLatLng.length < 2) {
+    if (DISABLE_DIRECTIONS || pathLatLng.length < 2) {
       setDirections(null);
+      setDirectionsError("");
       return;
     }
     const svc = new window.google.maps.DirectionsService();
@@ -308,24 +310,9 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
           });
         }
         // Start / end markers with distinct colors when advanced markers are available
-        if (hasEndpoints && startPos) {
-          const startPin = new PinElement({
-            glyphText: "S",
-            background: "#16a34a",
-            glyphColor: "#f8fafc",
-          });
-          advMarkersRef.current.push(
-            new AdvancedMarkerElement({
-              position: startPos,
-              map: mapRef.current,
-              title: "Start",
-              content: startPin.element,
-            })
-          );
-        }
         if (hasEndpoints && endPos) {
           const endPin = new PinElement({
-            glyphText: "E",
+            glyphText: "F",
             background: "#ef4444",
             glyphColor: "#f8fafc",
           });
@@ -333,7 +320,7 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
             new AdvancedMarkerElement({
               position: endPos,
               map: mapRef.current,
-              title: "End",
+              title: "Finish",
               content: endPin.element,
             })
           );
@@ -406,19 +393,11 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
         >
         {(!advSupported || advMarkersRef.current.length === 0) && (
           <>
-            {hasEndpoints && startPos && (
-              <Marker
-                position={startPos}
-                label="S"
-                title="Start"
-                icon={{ url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" }}
-              />
-            )}
             {hasEndpoints && endPos && (
               <Marker
                 position={endPos}
-                label="E"
-                title="End"
+                label="F"
+                title="Finish"
                 icon={{ url: "http://maps.google.com/mapfiles/ms/icons/red-dot.png" }}
               />
             )}

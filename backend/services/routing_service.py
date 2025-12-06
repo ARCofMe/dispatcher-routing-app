@@ -27,6 +27,17 @@ class RoutingService:
         self._routing_helpers = self._init_routing_helpers()
         self._geocoder = self._init_geocoder()
         self._geocode_cache = self._init_cache()
+        self._logger = None
+
+    def _log(self, event: str, data: dict):
+        try:
+            import logging
+            if not self._logger:
+                self._logger = logging.getLogger("routing")
+            self._logger.info(f"{event}: {data}")
+        except Exception:
+            # Avoid breaking flow on logging errors in tests.
+            pass
 
     def _init_routing_helpers(self):
         try:
@@ -68,6 +79,7 @@ class RoutingService:
     def preview_route(self, stops: Sequence[dict], origin: str = None, destination: str = None, optimize: bool = False):
         # Ensure coordinates early so optimization can use distance.
         hydrated = self._ensure_coordinates(list(stops))
+        self._log("route_preview_input", {"count": len(hydrated), "optimize": optimize, "origin": origin, "destination": destination})
         ordered = self._optimize_order(hydrated, optimize=optimize, origin=origin, destination=destination)
         metrics, enriched_stops = self._build_metrics(ordered, origin=origin, destination=destination)
         return {"stops": enriched_stops, "metrics": metrics, "path": self._build_path(enriched_stops, origin=origin, destination=destination)}
@@ -132,12 +144,15 @@ class RoutingService:
                             current_coord = (float(last["lat"]), float(last["lon"]))
                     except Exception:
                         pass
+                self._log("opt_window_result", {"count": len(ordered)})
                 return ordered
-            except Exception:
-                pass
+            except Exception as e:
+                self._log("opt_window_error", {"error": str(e)})
 
         # Attempt Directions-based optimization.
-        gmaps_key = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("VITE_GOOGLE_MAPS_API_KEY")
+        gmaps_key = None
+        if str(os.getenv("DISABLE_GMAPS_DIRECTIONS") or "").lower() not in ("1", "true", "yes"):
+            gmaps_key = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("VITE_GOOGLE_MAPS_API_KEY")
         if gmaps_key:
             # Attempt full-route optimization via Google Maps (server-side key) if available.
             try:
@@ -165,9 +180,12 @@ class RoutingService:
                             order = directions[0]["waypoint_order"]
                             middle = [stops[1:-1][i] for i in order] if len(stops) > 2 else []
                             reordered = [stops[0]] + middle + [stops[-1]]
+                            self._log("opt_directions_success", {"order": order, "orig": orig, "dest": dest, "waypoints": len(waypoint_addrs)})
                             return reordered
-            except Exception:
-                pass
+                        else:
+                            self._log("opt_directions_no_order", {"orig": orig, "dest": dest, "waypoints": len(waypoint_addrs)})
+            except Exception as e:
+                self._log("opt_directions_error", {"error": str(e)})
 
         # Distance-based fallback.
         origin_coord = None
@@ -188,6 +206,7 @@ class RoutingService:
             dest_coord=dest_coord,
         )
         if nn:
+            self._log("opt_nn_used", {"count": len(nn), "fix_endpoints": bool(origin_coord or dest_coord)})
             return nn
 
         # Last resort, keep incoming.

@@ -26,6 +26,7 @@ def preview():
     origin=request.args.get("origin")
     destination=request.args.get("destination")
     optimize=request.args.get("optimize")
+    app.logger.info("preview_request", extra={"tech_id": tech_id, "date": str(date), "optimize": optimize, "origin": origin, "destination": destination})
     return jsonify(router.preview_route(stops, origin=origin, destination=destination, optimize=optimize in ("true","1",True)))
 
 @api.post("/route/simulate")
