@@ -3,6 +3,7 @@ from pathlib import Path
 
 from flask import Flask, send_from_directory
 from flask_cors import CORS
+from dotenv import load_dotenv
 from routes import api
 from config import config
 
@@ -13,6 +14,8 @@ def _dist_dir():
 
 
 def create_app():
+    # Load backend/.env so service credentials and feature flags are available when running locally.
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
     dist_dir = _dist_dir()
     app = Flask(__name__, static_folder=str(dist_dir), static_url_path="/")
     CORS(app)

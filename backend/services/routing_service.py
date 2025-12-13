@@ -3,6 +3,7 @@ import sys
 import math
 from datetime import datetime, time, timedelta
 from typing import List, Sequence
+from urllib.parse import urlparse
 
 
 def _maybe_extend_sys_path():
@@ -24,11 +25,14 @@ class RoutingService:
 
     def __init__(self):
         _maybe_extend_sys_path()
+        self._geoapify_key = os.getenv("GEOAPIFY_API_KEY")
+        self._use_geoapify_matrix = bool(self._geoapify_key)
         self._routing_helpers = self._init_routing_helpers()
         self._geocoder = self._init_geocoder()
         self._geocode_cache = self._init_cache()
         self._logger = None
         self._osrm_url = os.getenv("OSRM_URL")
+        self._respect_windows = str(os.getenv("OPTIMIZE_RESPECT_WINDOWS") or "true").lower() in ("1", "true", "yes")
 
     def _log(self, event: str, data: dict):
         try:
@@ -58,13 +62,29 @@ class RoutingService:
             import googlemaps  # type: ignore
 
             key = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("VITE_GOOGLE_MAPS_API_KEY")
-            if key:
+            disable_google = str(os.getenv("DISABLE_GMAPS_GEOCODER") or "").lower() in ("1", "true", "yes")
+            if key and not disable_google:
                 return googlemaps.Client(key=key)
+        except Exception:
+            pass
+        try:
+            # Geoapify (preferred hosted option) if API key is provided.
+            geoapify_key = os.getenv("GEOAPIFY_API_KEY")
+            if geoapify_key:
+                from geopy.geocoders import Geoapify  # type: ignore
+
+                return Geoapify(api_key=geoapify_key, timeout=5)
         except Exception:
             pass
         try:
             from geopy.geocoders import Nominatim  # type: ignore
 
+            # Allow overriding the Nominatim endpoint (e.g., self-hosted) via NOMINATIM_URL.
+            nominatim_domain = os.getenv("NOMINATIM_URL")
+            if nominatim_domain:
+                parsed = urlparse(nominatim_domain)
+                domain = parsed.netloc or parsed.path or nominatim_domain
+                return Nominatim(user_agent="dispatcher-routing-app", domain=domain)
             return Nominatim(user_agent="dispatcher-routing-app")
         except Exception:
             return None
@@ -109,13 +129,14 @@ class RoutingService:
         if not optimize:
             return stops
 
-        # If multiple distinct windows exist, honor window ordering first and optimize within each window.
+        # If multiple distinct windows exist, optionally honor window ordering first and optimize within each window.
         unique_windows = {s.get("window_start") for s in stops if s.get("window_start")}
-        if unique_windows and len(unique_windows) > 1:
+        if self._respect_windows and unique_windows and len(unique_windows) > 1:
             try:
                 # Geocode origin/destination once for anchoring buckets.
                 origin_coord = None
                 dest_coord = None
+                bucket_matrix = None
                 try:
                     if origin:
                         origin_coord = self._geocode(origin)
@@ -130,12 +151,36 @@ class RoutingService:
                 sorted_windows = sorted(unique_windows)
                 for idx, ws in enumerate(sorted_windows):
                     bucket = [s for s in stops if s.get("window_start") == ws]
+                    bucket_matrix = self._geoapify_matrix(bucket) if self._use_geoapify_matrix else None
+                    if self._use_geoapify_matrix:
+                        try:
+                            self._log("geoapify_bucket_matrix", {"window": ws, "size": len(bucket), "has_matrix": bool(bucket_matrix)})
+                        except Exception:
+                            pass
                     is_last = idx == len(sorted_windows) - 1
+                    preferred_start = None
+                    if current_coord:
+                        try:
+                            # pick the bucket stop closest to current_coord
+                            coords = [
+                                (float(b.get("lat")), float(b.get("lon"))) if b.get("lat") is not None and b.get("lon") is not None else None
+                                for b in bucket
+                            ]
+                            with_coords = [i for i, c in enumerate(coords) if c is not None]
+                            if with_coords:
+                                def dist(i):
+                                    lat, lon = coords[i]
+                                    return self._haversine(current_coord[1], current_coord[0], lon, lat)
+                                preferred_start = min(with_coords, key=dist)
+                        except Exception:
+                            preferred_start = None
                     nn_bucket = self._nearest_neighbor(
                         bucket,
-                        fix_endpoints=False,
+                        fix_endpoints=bool(dest_coord and is_last),
                         start_coord=current_coord,
                         dest_coord=dest_coord if is_last else None,
+                        distance_matrix=bucket_matrix,
+                        preferred_start_idx=preferred_start,
                     ) or bucket
                     ordered.extend(nn_bucket)
                     # Update anchor to last stop in this bucket for next bucket.
@@ -200,11 +245,23 @@ class RoutingService:
             origin_coord = None
             dest_coord = None
 
+        distance_matrix = None
+        if self._use_geoapify_matrix:
+            try:
+                distance_matrix = self._geoapify_matrix(stops)
+                try:
+                    self._log("geoapify_route_matrix", {"count": len(stops), "has_matrix": bool(distance_matrix)})
+                except Exception:
+                    pass
+            except Exception:
+                distance_matrix = None
+
         nn = self._nearest_neighbor(
             stops,
             fix_endpoints=bool(origin_coord or dest_coord),
             start_coord=origin_coord,
             dest_coord=dest_coord,
+            distance_matrix=distance_matrix,
         )
         if nn:
             self._log("opt_nn_used", {"count": len(nn), "fix_endpoints": bool(origin_coord or dest_coord)})
@@ -219,6 +276,8 @@ class RoutingService:
         fix_endpoints: bool = False,
         start_coord: tuple = None,
         dest_coord: tuple = None,
+        distance_matrix: List[List[float]] = None,
+        preferred_start_idx: int = None,
     ) -> List[dict]:
         """Simple nearest-neighbor path using lat/lon.
         Tries multiple start candidates and picks the shortest path; if fix_endpoints/dest provided, anchor the finish."""
@@ -251,7 +310,17 @@ class RoutingService:
                 return self._haversine(lon, lat, dest_coord[1], dest_coord[0])
             return 0.0
 
-        start_candidates = sorted(with_coords, key=dist_to_start)[:3] or with_coords[:3]
+        def leg_minutes(i, j):
+            if distance_matrix and distance_matrix[i][j] is not None:
+                return distance_matrix[i][j]
+            lat1, lon1 = coords[i]
+            lat2, lon2 = coords[j]
+            return (self._haversine(lon1, lat1, lon2, lat2) / self.AVERAGE_SPEED_KMH) * 60.0
+
+        if preferred_start_idx is not None and preferred_start_idx in with_coords:
+            start_candidates = [preferred_start_idx]
+        else:
+            start_candidates = sorted(with_coords, key=dist_to_start)[:3] or with_coords[:3]
 
         def build_route(start_idx):
             end_idx = min(with_coords, key=dist_to_dest) if (fix_endpoints and dest_coord) else None
@@ -270,6 +339,8 @@ class RoutingService:
 
                 def hav(idx):
                     lat, lon = coords[idx]
+                    if distance_matrix and distance_matrix[current][idx] is not None:
+                        return distance_matrix[current][idx]
                     return self._haversine(clon, clat, lon, lat)
 
                 next_idx = min(remaining, key=hav)
@@ -286,29 +357,116 @@ class RoutingService:
 
         def route_cost(order):
             total = 0.0
-            prev = None
+            prev_coord = None
+            prev_idx = None
             if start_coord is not None:
-                prev = (start_coord[0], start_coord[1])
+                prev_coord = (start_coord[0], start_coord[1])
             for idx in order:
                 lat, lon = coords[idx] if coords[idx] is not None else (None, None)
-                if prev and lat is not None and lon is not None:
-                    total += self._haversine(prev[1], prev[0], lon, lat)
+                if prev_coord and lat is not None and lon is not None:
+                    if distance_matrix and prev_idx is not None and distance_matrix[prev_idx][idx] is not None:
+                        total += distance_matrix[prev_idx][idx]
+                    else:
+                        total += self._haversine(prev_coord[1], prev_coord[0], lon, lat)
                 if lat is not None and lon is not None:
-                    prev = (lat, lon)
-            if dest_coord and prev:
-                total += self._haversine(prev[1], prev[0], dest_coord[1], dest_coord[0])
+                    prev_coord = (lat, lon)
+                    prev_idx = idx
+            if dest_coord and prev_coord:
+                total += self._haversine(prev_coord[1], prev_coord[0], dest_coord[1], dest_coord[0])
             return total
 
+        # Exact search for small sets to improve quality.
         best_order = None
         best_cost = float("inf")
-        for cand in start_candidates:
-            order = build_route(cand)
-            cost = route_cost(order)
-            if cost < best_cost:
-                best_cost = cost
-                best_order = order
+        from itertools import permutations
 
-        return [stops[i] for i in best_order] if best_order else []
+        max_exact = 8  # safe upper bound for factorial search
+        if len(with_coords) <= max_exact:
+            coord_only = with_coords
+            # If we have a preferred start index, keep it fixed to anchor the bucket to current_coord.
+            if preferred_start_idx is not None and preferred_start_idx in coord_only:
+                remaining = [i for i in coord_only if i != preferred_start_idx]
+                for perm_tail in permutations(remaining):
+                    perm = (preferred_start_idx,) + perm_tail
+                    cost = route_cost(list(perm))
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_order = list(perm) + [i for i in indices if i not in perm]
+            else:
+                if fix_endpoints and start_coord is None:
+                    start_candidates = coord_only[:1]
+                for perm in permutations(coord_only):
+                    cost = route_cost(list(perm))
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_order = list(perm) + [i for i in indices if i not in perm]
+        else:
+            for cand in start_candidates:
+                order = build_route(cand)
+                cost = route_cost(order)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_order = order
+
+        # Optional 2-opt refinement on the portion with coordinates.
+        def two_opt(order):
+            # Only consider indices that have coords; keep no-coord stops at the end as-is.
+            coord_indices = [idx for idx in order if coords[idx] is not None]
+            if len(coord_indices) < 3:
+                return order
+            improved = True
+            current = coord_indices[:]
+
+            def ordered_cost(ord_list):
+                total = 0.0
+                prev_coord = None
+                prev_idx = None
+                if start_coord is not None:
+                    prev_coord = (start_coord[0], start_coord[1])
+                for idx in ord_list:
+                    lat, lon = coords[idx]
+                    if prev_coord is not None and prev_idx is not None and distance_matrix and distance_matrix[prev_idx][idx] is not None:
+                        total += distance_matrix[prev_idx][idx]
+                    elif prev_coord is not None:
+                        total += self._haversine(prev_coord[1], prev_coord[0], lon, lat)
+                    prev_coord = (lat, lon)
+                    prev_idx = idx
+                if dest_coord and prev_coord is not None:
+                    total += self._haversine(prev_coord[1], prev_coord[0], dest_coord[1], dest_coord[0])
+                return total
+
+            best = current
+            best_cost_local = ordered_cost(best)
+            iter_guard = 0
+            max_iter = len(coord_indices) * 10
+            while improved and iter_guard < max_iter:
+                improved = False
+                iter_guard += 1
+                n = len(best)
+                start_i = 1 if fix_endpoints else 0
+                end_i = n - 2 if fix_endpoints else n - 1
+                for i in range(start_i, end_i):
+                    for j in range(i + 1, n - (1 if fix_endpoints else 0)):
+                        if fix_endpoints and (i == 0 or j == n - 1):
+                            continue
+                        new_path = best[:i] + best[i:j + 1][::-1] + best[j + 1:]
+                        new_cost = ordered_cost(new_path)
+                        if new_cost + 1e-9 < best_cost_local:
+                            best = new_path
+                            best_cost_local = new_cost
+                            improved = True
+                if not improved:
+                    break
+
+            # Rebuild full order: optimized coords first, then any original no-coord entries in original relative order.
+            optimized_with_coords = best
+            no_coords = [idx for idx in order if idx not in optimized_with_coords]
+            return optimized_with_coords + no_coords
+
+        if best_order:
+            refined = two_opt(best_order)
+            return [stops[i] for i in refined]
+        return []
 
     def _osrm_route(self, stops: Sequence[dict], origin: str = None, destination: str = None):
         import requests
@@ -437,8 +595,10 @@ class RoutingService:
         return sorted(stops, key=lambda s: order_lookup.get(str(s.get("id")), len(manual_order)))
 
     def _build_path(self, stops: Sequence[dict], origin: str = None, destination: str = None):
-        # If OSRM_URL is set, attempt to fetch a routed path.
-        if self._osrm_url and len(stops) >= 2:
+        # Prefer a routed path (OSRM, then Geoapify) when available; fall back to straight coords.
+        coords_lonlat = self._collect_lonlat(origin, destination, stops)
+
+        if self._osrm_url and len(coords_lonlat) >= 2:
             try:
                 path = self._osrm_route(stops, origin=origin, destination=destination)
                 if path:
@@ -446,43 +606,52 @@ class RoutingService:
             except Exception:
                 pass
 
-        coords = []
-        # Optionally geocode origin/destination into the path so distance includes them.
-        if origin:
-            geocoded = self._geocode(origin)
-            if geocoded:
-                coords.append([geocoded[0], geocoded[1]])
-        for stop in stops:
-            lat = stop.get("lat")
-            lon = stop.get("lon")
-            if lat is not None and lon is not None:
-                coords.append([lat, lon])
-        if destination:
-            geocoded = self._geocode(destination)
-            if geocoded:
-                coords.append([geocoded[0], geocoded[1]])
-        return coords
+        if self._geoapify_key and len(coords_lonlat) >= 2:
+            try:
+                routed, _, _ = self._geoapify_route(coords_lonlat)
+                if routed:
+                    return routed
+            except Exception:
+                pass
+
+        # Fallback to raw points.
+        return [[lat, lon] for lon, lat in coords_lonlat]
 
     def _build_metrics(self, stops: Sequence[dict], origin: str = None, destination: str = None):
         total_distance_km = 0.0
         total_travel_minutes = 0.0
-        path = self._build_path(stops, origin=origin, destination=destination)
+        coords_lonlat = self._collect_lonlat(origin, destination, stops)
+        path = None
 
-        # If OSRM distance/duration is available, prefer it.
-        if self._osrm_url and len(path) > 1:
+        # Try OSRM first for both path and metrics.
+        if self._osrm_url and len(stops) >= 2:
             try:
-                osrm_metrics = self._osrm_metrics(path)
+                path = self._osrm_route(stops, origin=origin, destination=destination)
+                osrm_metrics = self._osrm_metrics(path) if path else None
                 if osrm_metrics:
                     total_distance_km = osrm_metrics["distance_km"]
                     total_travel_minutes = osrm_metrics["travel_minutes"]
-                else:
-                    raise ValueError("no osrm metrics")
             except Exception:
-                for i in range(1, len(path)):
-                    segment_km = self._haversine(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0])
-                    total_distance_km += segment_km
-                    total_travel_minutes += (segment_km / self.AVERAGE_SPEED_KMH) * 60
-        else:
+                path = None
+
+        # If OSRM unavailable, try Geoapify routing for path + metrics.
+        if path is None and self._geoapify_key and len(coords_lonlat) >= 2:
+            try:
+                routed, dist_km, time_min = self._geoapify_route(coords_lonlat)
+                if routed:
+                    path = routed
+                if dist_km is not None and time_min is not None:
+                    total_distance_km = dist_km
+                    total_travel_minutes = time_min
+            except Exception:
+                path = None
+
+        # Fallback: straight-line path and haversine metrics.
+        if path is None:
+            path = [[lat, lon] for lon, lat in coords_lonlat]
+
+        # If OSRM distance/duration is available, prefer it.
+        if total_distance_km == 0.0 and len(path) > 1:
             for i in range(1, len(path)):
                 segment_km = self._haversine(path[i - 1][1], path[i - 1][0], path[i][1], path[i][0])
                 total_distance_km += segment_km
@@ -512,6 +681,54 @@ class RoutingService:
         }
         return metrics, enriched_stops
 
+    def _collect_lonlat(self, origin: str, destination: str, stops: Sequence[dict]):
+        coords = []
+        if origin:
+            geocoded = self._geocode(origin)
+            if geocoded:
+                coords.append((geocoded[1], geocoded[0]))  # lon, lat
+        for s in stops:
+            if s.get("lat") is not None and s.get("lon") is not None:
+                coords.append((float(s["lon"]), float(s["lat"])))
+        if destination:
+            geocoded = self._geocode(destination)
+            if geocoded:
+                coords.append((geocoded[1], geocoded[0]))  # lon, lat
+        return coords
+
+    def _geoapify_route(self, coords_lonlat: Sequence[tuple]):
+        """Return (path_latlon, distance_km, time_minutes) via Geoapify routing."""
+        if not self._geoapify_key or len(coords_lonlat) < 2:
+            return None, None, None
+        import requests
+
+        waypoint_param = "|".join(f"{lon},{lat}" for lon, lat in coords_lonlat)
+        params = {
+            "waypoints": waypoint_param,
+            "mode": "drive",
+            "details": "false",
+            "apiKey": self._geoapify_key,
+        }
+        url = "https://api.geoapify.com/v1/routing"
+        resp = requests.get(url, params=params, timeout=8)
+        if resp.status_code != 200:
+            return None, None, None
+        data = resp.json()
+        if not data or "features" not in data or not data["features"]:
+            return None, None, None
+        feature = data["features"][0]
+        geom = feature.get("geometry", {})
+        coords = geom.get("coordinates")
+        if not coords:
+            return None, None, None
+        # GeoJSON LineString: [ [lon, lat], ... ]
+        line = coords[0] if isinstance(coords[0][0], list) else coords
+        path_latlon = [[pt[1], pt[0]] for pt in line]
+        props = feature.get("properties", {})
+        dist_km = props.get("distance") / 1000.0 if props.get("distance") is not None else None
+        time_min = props.get("time") / 60.0 if props.get("time") is not None else None
+        return path_latlon, dist_km, time_min
+
     @staticmethod
     def _haversine(lon1, lat1, lon2, lat2):
         """Calculate the great-circle distance between two points on the Earth."""
@@ -522,3 +739,61 @@ class RoutingService:
         c = 2 * math.asin(math.sqrt(a))
         r = 6371  # Earth radius in km
         return c * r
+
+    def _geoapify_matrix(self, stops: Sequence[dict]):
+        """
+        Fetch a drive-time matrix from Geoapify so optimization uses road distance/time
+        instead of straight-line haversine. Returns a minutes matrix or None on failure.
+        """
+        if not self._geoapify_key:
+            return None
+        import requests
+
+        coords = []
+        for s in stops:
+            if s.get("lat") is None or s.get("lon") is None:
+                return None
+            coords.append({"lat": float(s["lat"]), "lon": float(s["lon"])})
+        if len(coords) < 2:
+            return None
+
+        body = {
+            "mode": "drive",
+            "sources": coords,
+            "targets": coords,
+        }
+        url = f"https://api.geoapify.com/v1/routematrix?apiKey={self._geoapify_key}"
+        resp = requests.post(url, json=body, timeout=8)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not isinstance(data, dict):
+            return None
+        matrix = [[None for _ in coords] for _ in coords]
+        for item in data.get("sources_to_targets", []):
+            if isinstance(item, dict):
+                candidates = [item]
+            elif isinstance(item, list):
+                candidates = [i for i in item if isinstance(i, dict)]
+                if not candidates:
+                    try:
+                        self._log("geoapify_matrix_unexpected_item", {"item": item})
+                    except Exception:
+                        pass
+                    continue
+            else:
+                try:
+                    self._log("geoapify_matrix_unexpected_item", {"item": item})
+                except Exception:
+                    pass
+                continue
+
+            for row in candidates:
+                si = row.get("source_index")
+                ti = row.get("target_index")
+                if si is None or ti is None:
+                    continue
+                time_s = row.get("time")
+                if time_s is not None:
+                    matrix[si][ti] = time_s / 60.0
+        return matrix

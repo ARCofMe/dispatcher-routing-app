@@ -1,6 +1,7 @@
 import os
 import sys
 from datetime import date
+import traceback
 from typing import List, Optional
 
 from dataclasses import asdict
@@ -158,6 +159,34 @@ class BlueFolderService:
         Pull assignments for a technician on a given day.
         Real implementation uses BlueFolderIntegration.get_user_assignments_range.
         """
+        # Optional offline fallback: if set, serve from a cached JSON file when BF is unreachable.
+        offline_path = os.getenv("BLUEFOLDER_OFFLINE_FILE")
+
+        # Prefer the integration path because it enriches assignments with SR/location data.
+        try:
+            integration = self._integration_with_credentials(api_key, account) or self._integration
+            if integration and hasattr(integration, "get_user_assignments_range"):
+                start_date = f"{day.strftime('%Y.%m.%d')} 12:00 AM"
+                end_date = f"{day.strftime('%Y.%m.%d')} 11:59 PM"
+                assignments = integration.get_user_assignments_range(
+                    user_id=tech_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    date_range_type="scheduled",
+                )
+                if assignments:
+                    print("bf_source=integration", "count=", len(assignments))
+                    try:
+                        first = assignments[0]
+                        print("bf_assignment_keys", list(first.keys()))
+                    except Exception:
+                        pass
+                    return [self._map_assignment_to_stop(a) for a in assignments]
+        except Exception as e:
+            print("bf_integration_assignments_error", e)
+            print(traceback.format_exc())
+
+        # Fall back to direct client (minimal payloads) if integration fails.
         def _assignments_from_client():
             client = self._client_with_credentials(api_key, account)
             if client and hasattr(client, "assignments"):
@@ -172,61 +201,32 @@ class BlueFolderService:
             return None
 
         try:
-            integration = self._integration_with_credentials(api_key, account) or self._integration
-            if integration and hasattr(integration, "get_user_assignments_range"):
-                start_date = f"{day.strftime('%Y.%m.%d')} 12:00 AM"
-                end_date = f"{day.strftime('%Y.%m.%d')} 11:59 PM"
-                assignments = integration.get_user_assignments_range(
-                    user_id=tech_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                    date_range_type="scheduled",
-                )
-                if assignments:
-                    return [self._map_assignment_to_stop(a) for a in assignments]
-        except Exception:
-            pass
-
-        try:
             assignments = self._with_env_creds(api_key, account, _assignments_from_client)
             if assignments:
+                print("bf_source=client", "count=", len(assignments))
+                try:
+                    print("bf_first_assignment", assignments[0])
+                except Exception:
+                    pass
                 return [self._map_assignment_to_stop(a) for a in assignments]
-        except Exception:
-            pass
+        except Exception as e:
+            print("bf_client_assignments_error", e)
+            print(traceback.format_exc())
 
-        # Demo payload keeps the frontend and routing layers functional.
-        return [
-            Stop(
-                id="A1",
-                address="123 Demo St, City",
-                customer_name="Contoso Bakery",
-                duration_minutes=30,
-                window_start="08:00",
-                window_end="10:00",
-                lat=40.7128,
-                lon=-74.006,
-            ).__dict__,
-            Stop(
-                id="A2",
-                address="456 Sample Ave, City",
-                customer_name="Fabrikam HQ",
-                duration_minutes=45,
-                window_start="10:30",
-                window_end="12:30",
-                lat=40.706,
-                lon=-74.009,
-            ).__dict__,
-            Stop(
-                id="A3",
-                address="789 Placeholder Rd, City",
-                customer_name="Northwind Depot",
-                duration_minutes=20,
-                window_start="13:00",
-                window_end="16:00",
-                lat=40.715,
-                lon=-74.001,
-            ).__dict__,
-        ]
+        # Offline fallback if provided
+        if offline_path:
+            try:
+                import json
+                with open(offline_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Expecting a list of assignment dicts
+                return [self._map_assignment_to_stop(a) for a in data]
+            except Exception as e:
+                print("bf_offline_fallback_error", e)
+                print(traceback.format_exc())
+
+        # If everything fails, return empty to avoid misleading demo data.
+        return []
 
     def commit_route(self, tech_id: int, day: date, ordered_stops: List[dict], manual_order: Optional[list] = None):
         """
@@ -243,12 +243,12 @@ class BlueFolderService:
                 pass
         return {"status": "queued", "tech_id": tech_id, "date": day.isoformat(), "count": len(ordered_stops)}
 
-    @staticmethod
-    def _map_assignment_to_stop(assignment) -> dict:
+    def _map_assignment_to_stop(self, assignment) -> dict:
         """
         Translate a BlueFolder assignment object into the internal Stop schema.
         Expects BlueFolderIntegration-enriched assignments with address/city/state/zip.
         """
+        # Normalize address fields from the assignment payload.
         address_parts = [
             assignment.get("address") or "",
             assignment.get("city") or "",
@@ -256,15 +256,20 @@ class BlueFolderService:
             assignment.get("zip") or "",
         ]
         address = ", ".join([p for p in address_parts if p]).strip(", ")
-        window_start = None
-        window_end = None
-        start_time = assignment.get("start")
-        if start_time:
-            try:
-                window_start = start_time[11:16]
-            except Exception:
-                pass
 
+        # Window start/end from BF start/end (expected format YYYY-MM-DDTHH:MM:SS or similar).
+        def _time_str(val):
+            if not val:
+                return None
+            try:
+                return str(val)[11:16]
+            except Exception:
+                return None
+
+        window_start = _time_str(assignment.get("start"))
+        window_end = _time_str(assignment.get("end"))
+
+        # Status
         status = (
             assignment.get("status")
             or assignment.get("serviceRequestStatus")
@@ -272,6 +277,7 @@ class BlueFolderService:
             or ("complete" if str(assignment.get("isComplete")).lower() in ("1", "true", "yes") else "scheduled")
         )
 
+        # Equipment placeholders (not provided in current payload keys).
         equipment = assignment.get("equipmentToService") or assignment.get("equipment") or assignment.get("equipment_type")
         equipment_id = assignment.get("equipmentId") or assignment.get("equipment_id") or assignment.get("equipment_id_str") or None
 

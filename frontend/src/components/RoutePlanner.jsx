@@ -27,6 +27,8 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
   const [prevMetrics, setPrevMetrics] = useState(null);
   const [newStop, setNewStop] = useState({ name: "", address: "", duration_minutes: 60, window_start: "", window_end: "" });
   const draftKey = useMemo(() => `route-draft-${techId}-${date}`, [techId, date]);
+  const originKey = useMemo(() => `route-origin-${techId}`, [techId]);
+  const destinationKey = useMemo(() => `route-destination-${techId}`, [techId]);
   const cacheKey = useMemo(() => `route-cache-${techId}-${date}`, [techId, date]);
   const [validation, setValidation] = useState({ late: 0 });
   const [optimizeWaypoints, setOptimizeWaypoints] = useState(true);
@@ -37,6 +39,16 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
       setDate(dateValue);
     }
   }, [dateValue]);
+
+  // Load stored origin/destination per tech on tech change.
+  useEffect(() => {
+    try {
+      const storedOrigin = localStorage.getItem(originKey);
+      const storedDest = localStorage.getItem(destinationKey);
+      if (storedOrigin) setOriginAddress(storedOrigin);
+      if (storedDest) setDestinationAddress(storedDest);
+    } catch {}
+  }, [originKey, destinationKey]);
 
   const ensureClientIds = (stops = []) => {
     return stops.map((s) => {
@@ -73,29 +85,12 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
       try {
         window.__LAST_ROUTE_STOPS__ = data?.stops || [];
       } catch {}
-      localStorage.setItem(
-        cacheKey,
-        JSON.stringify({ route: data, originAddress, destinationAddress })
-      );
+      try {
+        if (originAddress) localStorage.setItem(originKey, originAddress);
+        if (destinationAddress) localStorage.setItem(destinationKey, destinationAddress);
+      } catch {}
     } catch (err) {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          setRoute(attachClientIdsToRoute(parsed.route));
-          setOriginAddress(parsed.originAddress || "");
-          setDestinationAddress(parsed.destinationAddress || "");
-          setRouteStats({ waypointMiles: parsed.route?.metrics?.total_distance_miles });
-          setStatus("Loaded cached route");
-          try {
-            window.__LAST_ROUTE_STOPS__ = parsed.route?.stops || [];
-          } catch {}
-        } catch {
-          setError("Failed to load preview");
-        }
-      } else {
-        setError("Failed to load preview");
-      }
+      setError("Failed to load preview");
     } finally {
       setLoading(false);
     }
@@ -129,10 +124,6 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
       try {
         window.__LAST_ROUTE_STOPS__ = updatedWithIds?.stops || [];
       } catch {}
-      localStorage.setItem(
-        cacheKey,
-        JSON.stringify({ route: updatedWithIds, originAddress, destinationAddress })
-      );
     } catch (err) {
       setError("Unable to simulate route");
     }
@@ -186,10 +177,6 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
       setRoute(attachClientIdsToRoute(updated));
       setRouteStats({ waypointMiles: updated?.metrics?.total_distance_miles });
       setStatus("Stop updated");
-      localStorage.setItem(
-        cacheKey,
-        JSON.stringify({ route: updated, originAddress, destinationAddress })
-      );
     } catch {
       setError("Unable to update stop");
     }

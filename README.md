@@ -52,6 +52,7 @@ DEBUG=1
 # DEFAULT_DURATION_MINUTES=60
 # Optional: self-hosted OSRM routing
 # OSRM_URL=http://localhost:5000  # replace with your osrm-backend URL
+# Note: Demo fallback stops removed; if BF fetch fails you'll get an empty list (check creds/status/date).
 ```
 
 ## Setup
@@ -92,7 +93,7 @@ To stop, close the PowerShell window (Ctrl+C). Re-run the script later to restar
 
 ## Notes on Integration
 - BlueFolder: `bluefolder_service.py` pulls techs/assignments via `BlueFolderIntegration`; map `_map_assignment_to_stop` to include duration/window/lat/lon when available. Status defaults to `pending`.
-- Routing: `routing_service.py` geocodes, optimizes (windows + nearest-neighbor + Directions when available), anchors origin/destination, and computes metrics. Manual order still respected when provided.
+- Routing: `routing_service.py` geocodes, optimizes (windows + nearest-neighbor + Directions when available), anchors origin/destination, and computes metrics. Manual order still respected when provided. When `GEOAPIFY_API_KEY` is set, a Geoapify routing matrix is used for road-aware optimization; the free tier is usually sufficient for daily dispatch volume and avoids Google Directions charges.
 - Commit endpoint is stubbed/unused in the UI; wire to BlueFolder assignment ordering if you need write-back.
 
 ## Usage

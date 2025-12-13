@@ -21,6 +21,7 @@ const MAP_ID = import.meta.env.VITE_GOOGLE_MAP_ID;
 const MAP_IDS = MAP_ID ? [MAP_ID] : [];
 const DISABLE_DIRECTIONS = String(import.meta.env.VITE_DISABLE_DIRECTIONS || "").toLowerCase() === "true";
 const USE_LEAFLET = String(import.meta.env.VITE_USE_LEAFLET || "").toLowerCase() === "true";
+const DISABLE_CLIENT_GEOCODE = String(import.meta.env.VITE_DISABLE_CLIENT_GEOCODE || "").toLowerCase() === "true";
 
 const EQUIPMENT_META = {
   rf: { label: "Refrigerator", bg: "#2563eb", marker: "blue" },
@@ -93,6 +94,12 @@ const resolveEquip = (stop) => {
   return "other";
 };
 
+const normalizeAddress = (addr = "") =>
+  addr
+    .replace(/\r?\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const buildIcon = (label, color) =>
   L.divIcon({
     className: "",
@@ -154,19 +161,21 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
   });
 
   useEffect(() => {
+    if (DISABLE_CLIENT_GEOCODE) return;
     if (!isLoaded || !(window.google && window.google.maps)) return;
     const geocoder = new window.google.maps.Geocoder();
     stops.forEach((s) => {
       const latMissing = s.lat == null || Number.isNaN(Number(s.lat));
       const lonMissing = s.lon == null || Number.isNaN(Number(s.lon));
-      if ((latMissing || lonMissing) && s.address && !geoCache[s.id]) {
-        geocoder.geocode({ address: s.address }, (results, status) => {
+      const addr = normalizeAddress(s.address || "");
+      if ((latMissing || lonMissing) && addr && !geoCache[s.id]) {
+        geocoder.geocode({ address: addr }, (results, status) => {
           if (status === "OK" && results && results[0]) {
             const loc = results[0].geometry.location;
             setGeoCache((prev) => ({ ...prev, [s.id]: { lat: loc.lat(), lng: loc.lng() } }));
           } else {
             // Surface failed lookups so missing markers are discoverable.
-            console.warn("Geocode failed for stop", s.id, s.address, status);
+            console.warn("Geocode failed for stop", s.id, addr, status);
           }
         });
       }
@@ -287,10 +296,13 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
 
   useEffect(() => {
     if (!isLoaded || !mapReady || !(window.google && window.google.maps) || !mapRef.current) return;
-    if (markers.length) {
+    if (markers.length || startPos || endPos) {
       const bounds = new window.google.maps.LatLngBounds();
       markers.forEach((m) => bounds.extend(m.position));
-      mapRef.current.panTo(markers[0].position);
+      if (startPos) bounds.extend(startPos);
+      if (endPos) bounds.extend(endPos);
+      const firstPos = markers[0]?.position || startPos || endPos;
+      if (firstPos) mapRef.current.panTo(firstPos);
       mapRef.current.fitBounds(bounds, 80);
     }
   }, [markers, isLoaded, mapReady]);
@@ -360,6 +372,21 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
             })
           );
         }
+        if (hasEndpoints && startPos) {
+            const startPin = new PinElement({
+              glyphText: "S",
+              background: "#22c55e",
+              glyphColor: "#f8fafc",
+            });
+            advMarkersRef.current.push(
+              new AdvancedMarkerElement({
+                position: startPos,
+                map: mapRef.current,
+                title: "Start",
+                content: startPin.element,
+              })
+            );
+        }
         if (!cancelled) {
           lastAdvSigRef.current = advSignature;
           setAdvSupported(advMarkersRef.current.length > 0);
@@ -398,15 +425,22 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
 
   if (USE_LEAFLET) {
     const finishIcon = buildIcon("F", "#ef4444");
+    const startIcon = buildIcon("S", "#22c55e");
+    const fitMarkers = [
+      ...markers,
+      ...(startPos ? [{ id: "start-pos", position: startPos }] : []),
+      ...(endPos ? [{ id: "end-pos", position: endPos }] : []),
+    ];
     return (
       <div style={containerStyle}>
         <div style={{ position: "relative", width: "100%", height: MAP_HEIGHT, borderRadius: 8, overflow: "hidden" }}>
           <MapContainer center={center} zoom={10} style={{ width: "100%", height: "100%" }}>
             <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            <FitBounds markers={markers} />
+            <FitBounds markers={fitMarkers} />
             {markers.map((m) => (
               <LeafletMarker key={m.id} position={m.position} icon={buildIcon(m.label, EQUIPMENT_META[m.equipment]?.bg || "#2563eb")} />
             ))}
+            {hasEndpoints && startPos && <LeafletMarker position={startPos} icon={startIcon} />}
             {hasEndpoints && endPos && <LeafletMarker position={endPos} icon={finishIcon} />}
             {pathLatLng.length > 1 && <LeafletPolyline positions={pathLatLng} pathOptions={{ color: "#2563eb", weight: 4, opacity: 0.85 }} />}
           </MapContainer>
@@ -457,6 +491,14 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
         >
         {(!advSupported || advMarkersRef.current.length === 0) && (
           <>
+            {hasEndpoints && startPos && (
+              <Marker
+                position={startPos}
+                label="S"
+                title="Start"
+                icon={{ url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" }}
+              />
+            )}
             {hasEndpoints && endPos && (
               <Marker
                 position={endPos}

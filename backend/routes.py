@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime
 from services.bluefolder_service import BlueFolderService
 from services.routing_service import RoutingService
@@ -10,6 +10,11 @@ router = RoutingService()
 def _creds_from_headers(req):
     api_key = req.headers.get("X-BF-API-KEY") or req.args.get("api_key")
     account = req.headers.get("X-BF-ACCOUNT") or req.args.get("account")
+    # Treat empty strings as missing so we fall back to backend env credentials.
+    if api_key is not None and not str(api_key).strip():
+        api_key = None
+    if account is not None and not str(account).strip():
+        account = None
     return api_key, account
 
 @api.get("/techs")
@@ -26,7 +31,11 @@ def preview():
     origin=request.args.get("origin")
     destination=request.args.get("destination")
     optimize=request.args.get("optimize")
-    app.logger.info("preview_request", extra={"tech_id": tech_id, "date": str(date), "optimize": optimize, "origin": origin, "destination": destination})
+    try:
+        current_app.logger.info("preview_request", extra={"tech_id": tech_id, "date": str(date), "optimize": optimize, "origin": origin, "destination": destination})
+        current_app.logger.info("preview_stops", extra={"count": len(stops), "sample": stops[:1]})
+    except Exception:
+        pass
     return jsonify(router.preview_route(stops, origin=origin, destination=destination, optimize=optimize in ("true","1",True)))
 
 @api.post("/route/simulate")
