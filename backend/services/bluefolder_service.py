@@ -32,6 +32,7 @@ class BlueFolderService:
 
     def __init__(self):
         _maybe_extend_sys_path()
+        self._apply_base_url_env()
         self._integration = self._init_integration()
         default_duration = os.getenv("DEFAULT_DURATION_MINUTES")
         try:
@@ -39,29 +40,57 @@ class BlueFolderService:
         except Exception:
             self.default_duration = 60
 
+    def _build_base_url(self, account: Optional[str] = None) -> Optional[str]:
+        """
+        Derive the BlueFolder base URL from explicit env or the account name.
+        Avoids the placeholder default baked into the upstream integration config.
+        """
+        env_base = os.getenv("BLUEFOLDER_BASE_URL")
+        if env_base:
+            return env_base.rstrip("/")
+        account_name = account or os.getenv("BLUEFOLDER_ACCOUNT_NAME")
+        if account_name:
+            return f"https://{account_name}.bluefolder.com/api/2.0"
+        return None
+
+    def _apply_base_url_env(self, account: Optional[str] = None):
+        """
+        Ensure the environment exposes BLUEFOLDER_BASE_URL before importing the integration.
+        """
+        base_url = self._build_base_url(account)
+        if base_url:
+            os.environ.setdefault("BLUEFOLDER_BASE_URL", base_url)
+
     def _integration_with_credentials(self, api_key: Optional[str], account: Optional[str]):
         if not api_key or not account:
             return None
         try:
-            from optimized_routing.bluefolder_integration import BlueFolderIntegration  # type: ignore
-            from bluefolder_api.client import BlueFolderClient  # type: ignore
+            base_url = self._build_base_url(account)
 
             def _build():
-                client = BlueFolderClient()
-                return BlueFolderIntegration(client=client)
+                from optimized_routing.bluefolder_integration import BlueFolderIntegration  # type: ignore
+                from bluefolder_api.client import BlueFolderClient  # type: ignore
 
-            return self._with_env_creds(api_key, account, _build)
+                client_kwargs = {"base_url": base_url} if base_url else {}
+                client = BlueFolderClient(**client_kwargs)
+                return BlueFolderIntegration(client=client, base_url=base_url)
+
+            return self._with_env_creds(api_key, account, _build, base_url=base_url)
         except Exception:
             return None
 
-    def _with_env_creds(self, api_key: Optional[str], account: Optional[str], fn):
+    def _with_env_creds(self, api_key: Optional[str], account: Optional[str], fn, base_url: Optional[str] = None):
         prev_key = os.environ.get("BLUEFOLDER_API_KEY")
         prev_account = os.environ.get("BLUEFOLDER_ACCOUNT_NAME")
+        prev_base_url = os.environ.get("BLUEFOLDER_BASE_URL")
+        base_url = base_url or self._build_base_url(account)
         try:
             if api_key:
                 os.environ["BLUEFOLDER_API_KEY"] = api_key
             if account:
                 os.environ["BLUEFOLDER_ACCOUNT_NAME"] = account
+            if base_url:
+                os.environ["BLUEFOLDER_BASE_URL"] = base_url
             return fn()
         finally:
             if prev_key is not None:
@@ -72,19 +101,27 @@ class BlueFolderService:
                 os.environ["BLUEFOLDER_ACCOUNT_NAME"] = prev_account
             else:
                 os.environ.pop("BLUEFOLDER_ACCOUNT_NAME", None)
+            if prev_base_url is not None:
+                os.environ["BLUEFOLDER_BASE_URL"] = prev_base_url
+            else:
+                os.environ.pop("BLUEFOLDER_BASE_URL", None)
 
     def _init_integration(self):
+        base_url = self._build_base_url()
+        if base_url:
+            os.environ.setdefault("BLUEFOLDER_BASE_URL", base_url)
         try:
             from optimized_routing.bluefolder_integration import BlueFolderIntegration  # type: ignore
 
-            return BlueFolderIntegration()
+            return BlueFolderIntegration(base_url=base_url)
         except Exception:
             try:
                 from bluefolder_api.client import BlueFolderClient  # type: ignore
 
                 class _Wrapper:
                     def __init__(self):
-                        self.client = BlueFolderClient()
+                        client_kwargs = {"base_url": base_url} if base_url else {}
+                        self.client = BlueFolderClient(**client_kwargs)
 
                     def get_active_users(self):
                         return self.client.users.list_active()
@@ -107,7 +144,13 @@ class BlueFolderService:
         try:
             from bluefolder_api.client import BlueFolderClient  # type: ignore
 
-            return self._with_env_creds(api_key, account, lambda: BlueFolderClient())
+            base_url = self._build_base_url(account)
+            return self._with_env_creds(
+                api_key,
+                account,
+                lambda: BlueFolderClient(**({"base_url": base_url} if base_url else {})),
+                base_url=base_url,
+            )
         except Exception:
             return None
 

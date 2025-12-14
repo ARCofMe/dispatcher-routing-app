@@ -43,6 +43,7 @@ Backend env (place in `backend/.env` or shell):
 ```
 BLUEFOLDER_API_KEY=your_api_key
 BLUEFOLDER_ACCOUNT_NAME=your_subdomain
+BLUEFOLDER_BASE_URL=https://your-subdomain.bluefolder.com/api/2.0  # optional; auto-derived from account if unset
 BLUEFOLDER_API_PATH=/path/to/bluefolder-api        # optional override
 ROUTING_EXTENSION_PATH=/path/to/optimized-routing-extension
 DEBUG=1
@@ -92,7 +93,7 @@ We ship a helper script that builds the frontend, sets up a Python virtualenv, i
 To stop, close the PowerShell window (Ctrl+C). Re-run the script later to restart; it reuses the existing venv/node_modules.
 
 ## Notes on Integration
-- BlueFolder: `bluefolder_service.py` pulls techs/assignments via `BlueFolderIntegration`; map `_map_assignment_to_stop` to include duration/window/lat/lon when available. Status defaults to `pending`.
+- BlueFolder: `bluefolder_service.py` pulls techs/assignments via `BlueFolderIntegration`; map `_map_assignment_to_stop` to include duration/window/lat/lon when available. Status defaults to `pending`. Set `BLUEFOLDER_BASE_URL` if you use a custom domain; otherwise it will derive `https://<account>.bluefolder.com/api/2.0` from `BLUEFOLDER_ACCOUNT_NAME`.
 - Routing: `routing_service.py` geocodes, optimizes (windows + nearest-neighbor + Directions when available), anchors origin/destination, and computes metrics. Manual order still respected when provided. When `GEOAPIFY_API_KEY` is set, a Geoapify routing matrix is used for road-aware optimization; the free tier is usually sufficient for daily dispatch volume and avoids Google Directions charges.
 - Commit endpoint is stubbed/unused in the UI; wire to BlueFolder assignment ordering if you need write-back.
 
