@@ -74,6 +74,30 @@ npm install
 npm run dev
 ```
 
+## Raspberry Pi (LAN) Deploy — Docker Compose
+Prereqs: Raspberry Pi 4+ (2GB+), Docker + Compose installed, outbound HTTPS for image/build or local package mirrors.
+
+1) Copy `.env` to `backend/.env` and fill keys (`BLUEFOLDER_API_KEY`, `BLUEFOLDER_ACCOUNT_NAME`, optional `BLUEFOLDER_BASE_URL`, `GEOAPIFY_API_KEY`, `GOOGLE_MAPS_API_KEY`, `OSRM_URL`).
+2) Build + run:
+   ```
+   docker compose -f docker-compose.pi.yml build
+   docker compose -f docker-compose.pi.yml up -d
+   ```
+   - Frontend on port 80, backend on 5000 (internal service name `backend`).
+   - `VITE_API_BASE` is baked to `http://backend:5000/api` during the frontend build.
+3) Logs/restart:
+   ```
+   docker compose -f docker-compose.pi.yml logs -f
+   docker compose -f docker-compose.pi.yml restart
+   ```
+4) Updating:
+   ```
+   git pull
+   docker compose -f docker-compose.pi.yml build --pull
+   docker compose -f docker-compose.pi.yml up -d
+   ```
+If you prefer bare-metal on Pi, run the backend via systemd and serve `frontend/dist` with nginx, proxying `/api` to `localhost:5000`.
+
 ## Quick Windows install (non-technical friendly)
 We ship a helper script that builds the frontend, sets up a Python virtualenv, installs backend deps, and runs everything on one port via Waitress.
 
