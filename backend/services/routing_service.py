@@ -31,8 +31,22 @@ class RoutingService:
         self._geocoder = self._init_geocoder()
         self._geocode_cache = self._init_cache()
         self._logger = None
-        self._osrm_url = os.getenv("OSRM_URL")
+        self._osrm_urls = {
+            'ME': os.getenv("OSRM_MAINE_URL"),
+            'NH': os.getenv("OSRM_NH_URL"),
+            'MA': os.getenv("OSRM_MA_URL")
+        }
         self._respect_windows = str(os.getenv("OPTIMIZE_RESPECT_WINDOWS") or "true").lower() in ("1", "true", "yes")
+
+    def _get_osrm_url(self, lat: float, lon: float) -> str:
+        """Determine OSRM URL based on lat/lon bounding boxes for New England states."""
+        if 43 <= lat <= 47 and -71 <= lon <= -67:
+            return self._osrm_urls.get('ME')
+        elif 42.7 <= lat <= 45.3 and -72.6 <= lon <= -70.6:
+            return self._osrm_urls.get('NH')
+        elif 41.2 <= lat <= 42.9 and -73.5 <= lon <= -69.9:
+            return self._osrm_urls.get('MA')
+        return None
 
     def _log(self, event: str, data: dict):
         try:
@@ -471,7 +485,20 @@ class RoutingService:
     def _osrm_route(self, stops: Sequence[dict], origin: str = None, destination: str = None):
         import requests
 
-        if not self._osrm_url:
+        # Determine OSRM URL from the first available lat/lon
+        osrm_url = None
+        if origin:
+            geocoded = self._geocode(origin)
+            if geocoded:
+                osrm_url = self._get_osrm_url(geocoded[0], geocoded[1])
+        if not osrm_url:
+            for s in stops:
+                lat = s.get("lat")
+                lon = s.get("lon")
+                if lat is not None and lon is not None:
+                    osrm_url = self._get_osrm_url(float(lat), float(lon))
+                    break
+        if not osrm_url:
             return None
 
         coords = []
@@ -492,7 +519,7 @@ class RoutingService:
 
         if len(coords) < 2:
             return None
-        url = f"{self._osrm_url.rstrip('/')}/route/v1/driving/" + ";".join(coords)
+        url = f"{osrm_url.rstrip('/')}/route/v1/driving/" + ";".join(coords)
         params = {"overview": "full", "geometries": "geojson", "steps": "false"}
         resp = requests.get(url, params=params, timeout=5)
         data = resp.json()
@@ -506,12 +533,18 @@ class RoutingService:
         return [[lat, lon] for lon, lat in geometry]
 
     def _osrm_metrics(self, path: Sequence[Sequence[float]]):
-        if not self._osrm_url or len(path) < 2:
+        if len(path) < 2:
             return None
+        # Determine OSRM URL from the first point in the path
+        lat, lon = path[0]
+        osrm_url = self._get_osrm_url(lat, lon)
+        if not osrm_url:
+            return None
+
         import requests
 
         coords = [f"{lon},{lat}" for lat, lon in path]
-        url = f"{self._osrm_url.rstrip('/')}/route/v1/driving/" + ";".join(coords)
+        url = f"{osrm_url.rstrip('/')}/route/v1/driving/" + ";".join(coords)
         params = {"overview": "false", "steps": "false", "annotations": "false"}
         resp = requests.get(url, params=params, timeout=5)
         data = resp.json()
@@ -598,7 +631,7 @@ class RoutingService:
         # Prefer a routed path (OSRM, then Geoapify) when available; fall back to straight coords.
         coords_lonlat = self._collect_lonlat(origin, destination, stops)
 
-        if self._osrm_url and len(coords_lonlat) >= 2:
+        if any(self._osrm_urls.values()) and len(coords_lonlat) >= 2:
             try:
                 path = self._osrm_route(stops, origin=origin, destination=destination)
                 if path:
@@ -624,7 +657,7 @@ class RoutingService:
         path = None
 
         # Try OSRM first for both path and metrics.
-        if self._osrm_url and len(stops) >= 2:
+        if any(self._osrm_urls.values()) and len(stops) >= 2:
             try:
                 path = self._osrm_route(stops, origin=origin, destination=destination)
                 osrm_metrics = self._osrm_metrics(path) if path else None

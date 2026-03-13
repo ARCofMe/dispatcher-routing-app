@@ -291,6 +291,30 @@ class BlueFolderService:
         Translate a BlueFolder assignment object into the internal Stop schema.
         Expects BlueFolderIntegration-enriched assignments with address/city/state/zip.
         """
+        # If assignment is not enriched (missing subject/address), try to enrich it here
+        if not assignment.get("subject") and assignment.get("serviceRequestId"):
+            try:
+                from bluefolder_api.client import BlueFolderClient
+                import xml.etree.ElementTree as ET
+                client = BlueFolderClient()
+                sr_id = assignment["serviceRequestId"]
+                sr_xml = client.service_requests.get_by_id(sr_id)
+                sr = sr_xml.find(".//serviceRequest")
+                if sr:
+                    assignment["subject"] = sr.findtext("description") or sr.findtext("subject") or "Service Request"
+                    customer_id = sr.findtext("customerId")
+                    location_id = sr.findtext("customerLocationId")
+                    if customer_id and location_id:
+                        loc_xml = client.customers.get_location_by_id(customer_id, location_id)
+                        loc = loc_xml.find(".//customerLocation")
+                        if loc:
+                            assignment["address"] = loc.findtext("addressStreet")
+                            assignment["city"] = loc.findtext("addressCity")
+                            assignment["state"] = loc.findtext("addressState")
+                            assignment["zip"] = loc.findtext("addressPostalCode")
+            except Exception:
+                pass  # Silently fail to avoid breaking the app
+
         # Normalize address fields from the assignment payload.
         address_parts = [
             assignment.get("address") or "",
@@ -299,6 +323,22 @@ class BlueFolderService:
             assignment.get("zip") or "",
         ]
         address = ", ".join([p for p in address_parts if p]).strip(", ")
+
+        # If address is empty but we have lat/lon, try reverse geocoding
+        if not address:
+            lat = assignment.get("lat")
+            lon = assignment.get("lon")
+            if lat is not None and lon is not None:
+                try:
+                    from geopy.geocoders import Geoapify
+                    geoapify_key = os.getenv("GEOAPIFY_API_KEY")
+                    if geoapify_key:
+                        geolocator = Geoapify(api_key=geoapify_key, timeout=5)
+                        location = geolocator.reverse((lat, lon), exactly_one=True)
+                        if location:
+                            address = location.address
+                except Exception:
+                    pass
 
         # Window start/end from BF start/end (expected format YYYY-MM-DDTHH:MM:SS or similar).
         def _time_str(val):
