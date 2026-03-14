@@ -324,22 +324,6 @@ class BlueFolderService:
         ]
         address = ", ".join([p for p in address_parts if p]).strip(", ")
 
-        # If address is empty but we have lat/lon, try reverse geocoding
-        if not address:
-            lat = assignment.get("lat")
-            lon = assignment.get("lon")
-            if lat is not None and lon is not None:
-                try:
-                    from geopy.geocoders import Geoapify
-                    geoapify_key = os.getenv("GEOAPIFY_API_KEY")
-                    if geoapify_key:
-                        geolocator = Geoapify(api_key=geoapify_key, timeout=5)
-                        location = geolocator.reverse((lat, lon), exactly_one=True)
-                        if location:
-                            address = location.address
-                except Exception:
-                    pass
-
         # Window start/end from BF start/end (expected format YYYY-MM-DDTHH:MM:SS or similar).
         def _time_str(val):
             if not val:

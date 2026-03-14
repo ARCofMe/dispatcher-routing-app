@@ -1,6 +1,8 @@
 import os
 import sys
 import math
+import json
+import time as time_module
 from datetime import datetime, time, timedelta
 from typing import List, Sequence
 from urllib.parse import urlparse
@@ -26,16 +28,22 @@ class RoutingService:
     def __init__(self):
         _maybe_extend_sys_path()
         self._geoapify_key = os.getenv("GEOAPIFY_API_KEY")
+        self._geoapify_only_mode = str(os.getenv("GEOAPIFY_ONLY_MODE") or "true").lower() in ("1", "true", "yes")
         self._use_geoapify_matrix = bool(self._geoapify_key)
         self._routing_helpers = self._init_routing_helpers()
         self._geocoder = self._init_geocoder()
         self._geocode_cache = self._init_cache()
+        self._routing_api_cache = self._init_routing_api_cache()
+        self._geocode_backoff_until = 0.0
+        self._geocode_last_request_at = 0.0
+        self._geocode_min_interval_seconds = float(os.getenv("GEOCODE_MIN_INTERVAL_SECONDS") or 0.25)
         self._logger = None
         self._osrm_urls = {
             'ME': os.getenv("OSRM_MAINE_URL"),
             'NH': os.getenv("OSRM_NH_URL"),
             'MA': os.getenv("OSRM_MA_URL")
         }
+        self._allow_osrm = not self._geoapify_only_mode and any(self._osrm_urls.values())
         self._respect_windows = str(os.getenv("OPTIMIZE_RESPECT_WINDOWS") or "true").lower() in ("1", "true", "yes")
 
     def _get_osrm_url(self, lat: float, lon: float) -> str:
@@ -47,6 +55,26 @@ class RoutingService:
         elif 41.2 <= lat <= 42.9 and -73.5 <= lon <= -69.9:
             return self._osrm_urls.get('MA')
         return None
+
+    def _get_traffic_multiplier(self) -> float:
+        """Return a traffic multiplier based on current time of day.
+        Basic implementation: higher during rush hours, lower during off-peak.
+        """
+        now = datetime.now()
+        hour = now.hour
+
+        # Morning rush hour: 7-9 AM
+        if 7 <= hour <= 9:
+            return 1.4  # 40% increase
+        # Evening rush hour: 4-6 PM
+        elif 16 <= hour <= 18:
+            return 1.3  # 30% increase
+        # Midday: 10 AM - 3 PM
+        elif 10 <= hour <= 15:
+            return 1.1  # 10% increase
+        # Off-peak: 7 PM - 6 AM
+        else:
+            return 1.0  # No increase
 
     def _log(self, event: str, data: dict):
         try:
@@ -72,6 +100,8 @@ class RoutingService:
             return None
 
     def _init_geocoder(self):
+        if self._geoapify_key:
+            return None
         try:
             import googlemaps  # type: ignore
 
@@ -82,32 +112,47 @@ class RoutingService:
         except Exception:
             pass
         try:
-            # Geoapify (preferred hosted option) if API key is provided.
+            # Try Geoapify if available (may not be in all geopy versions)
             geoapify_key = os.getenv("GEOAPIFY_API_KEY")
             if geoapify_key:
-                from geopy.geocoders import Geoapify  # type: ignore
-
-                return Geoapify(api_key=geoapify_key, timeout=5)
+                try:
+                    from geopy.geocoders import Geoapify  # type: ignore
+                    return Geoapify(api_key=geoapify_key, timeout=5)
+                except ImportError:
+                    # Geoapify not available in this geopy version
+                    pass
         except Exception:
             pass
         try:
             from geopy.geocoders import Nominatim  # type: ignore
 
+            enable_nominatim = str(os.getenv("ENABLE_NOMINATIM_GEOCODER") or "").lower() in ("1", "true", "yes")
             # Allow overriding the Nominatim endpoint (e.g., self-hosted) via NOMINATIM_URL.
             nominatim_domain = os.getenv("NOMINATIM_URL")
             if nominatim_domain:
                 parsed = urlparse(nominatim_domain)
                 domain = parsed.netloc or parsed.path or nominatim_domain
                 return Nominatim(user_agent="dispatcher-routing-app", domain=domain)
-            return Nominatim(user_agent="dispatcher-routing-app")
+            if enable_nominatim:
+                return Nominatim(user_agent="dispatcher-routing-app", timeout=5)
         except Exception:
             return None
+        return None
 
     def _init_cache(self):
         try:
             from optimized_routing.utils.cache_manager import CacheManager  # type: ignore
 
-            return CacheManager("geocode", ttl_minutes=60)
+            ttl_minutes = int(os.getenv("GEOCODE_CACHE_TTL_MINUTES") or str(30 * 24 * 60))
+            return CacheManager("geocode", ttl_minutes=ttl_minutes)
+        except Exception:
+            return None
+
+    def _init_routing_api_cache(self):
+        try:
+            from optimized_routing.utils.cache_manager import CacheManager  # type: ignore
+
+            return CacheManager("routing_api", ttl_minutes=15)
         except Exception:
             return None
 
@@ -116,8 +161,8 @@ class RoutingService:
         hydrated = self._ensure_coordinates(list(stops))
         self._log("route_preview_input", {"count": len(hydrated), "optimize": optimize, "origin": origin, "destination": destination})
         ordered = self._optimize_order(hydrated, optimize=optimize, origin=origin, destination=destination)
-        metrics, enriched_stops = self._build_metrics(ordered, origin=origin, destination=destination)
-        return {"stops": enriched_stops, "metrics": metrics, "path": self._build_path(enriched_stops, origin=origin, destination=destination)}
+        metrics, enriched_stops, path = self._build_metrics(ordered, origin=origin, destination=destination)
+        return {"stops": enriched_stops, "metrics": metrics, "path": path}
 
     def simulate_route(self, existing_assignments: List[dict], added_stops: List[dict], removed_ids: List[str], manual_order: List[str], origin: str = None, destination: str = None, optimize: bool = False):
         """
@@ -132,8 +177,8 @@ class RoutingService:
         ordered = self._ensure_coordinates(ordered)
         ordered = self._optimize_order(ordered, optimize=optimize, origin=origin, destination=destination)
 
-        metrics, enriched_stops = self._build_metrics(ordered, origin=origin, destination=destination)
-        return {"stops": enriched_stops, "metrics": metrics, "path": self._build_path(enriched_stops, origin=origin, destination=destination)}
+        metrics, enriched_stops, path = self._build_metrics(ordered, origin=origin, destination=destination)
+        return {"stops": enriched_stops, "metrics": metrics, "path": path}
 
     def _optimize_order(self, stops: List[dict], optimize: bool = False, origin: str = None, destination: str = None) -> List[dict]:
         """
@@ -147,18 +192,17 @@ class RoutingService:
         unique_windows = {s.get("window_start") for s in stops if s.get("window_start")}
         if self._respect_windows and unique_windows and len(unique_windows) > 1:
             try:
-                # Geocode origin/destination once for anchoring buckets.
+                # Skip geocoding origin/destination for now to avoid rate limits
                 origin_coord = None
                 dest_coord = None
-                bucket_matrix = None
-                try:
-                    if origin:
-                        origin_coord = self._geocode(origin)
-                    if destination:
-                        dest_coord = self._geocode(destination)
-                except Exception:
-                    origin_coord = None
-                    dest_coord = None
+                # try:
+                #     if origin:
+                #         origin_coord = self._geocode(origin)
+                #     if destination:
+                #         dest_coord = self._geocode(destination)
+                # except Exception:
+                #     origin_coord = None
+                #     dest_coord = None
 
                 ordered: List[dict] = []
                 current_coord = origin_coord
@@ -211,7 +255,7 @@ class RoutingService:
 
         # Attempt Directions-based optimization.
         gmaps_key = None
-        if str(os.getenv("DISABLE_GMAPS_DIRECTIONS") or "").lower() not in ("1", "true", "yes"):
+        if not self._geoapify_only_mode and str(os.getenv("DISABLE_GMAPS_DIRECTIONS") or "").lower() not in ("1", "true", "yes"):
             gmaps_key = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("VITE_GOOGLE_MAPS_API_KEY")
         if gmaps_key:
             # Attempt full-route optimization via Google Maps (server-side key) if available.
@@ -487,10 +531,11 @@ class RoutingService:
 
         # Determine OSRM URL from the first available lat/lon
         osrm_url = None
-        if origin:
-            geocoded = self._geocode(origin)
-            if geocoded:
-                osrm_url = self._get_osrm_url(geocoded[0], geocoded[1])
+        # Skip geocoding origin for OSRM URL determination
+        # if origin:
+        #     geocoded = self._geocode(origin)
+        #     if geocoded:
+        #         osrm_url = self._get_osrm_url(geocoded[0], geocoded[1])
         if not osrm_url:
             for s in stops:
                 lat = s.get("lat")
@@ -502,20 +547,22 @@ class RoutingService:
             return None
 
         coords = []
-        if origin:
-            geocoded = self._geocode(origin)
-            if geocoded:
-                coords.append(f"{geocoded[1]},{geocoded[0]}")
+        # Skip geocoding origin for now
+        # if origin:
+        #     geocoded = self._geocode(origin)
+        #     if geocoded:
+        #         coords.append(f"{geocoded[1]},{geocoded[0]}")
         for s in stops:
             lat = s.get("lat")
             lon = s.get("lon")
             if lat is None or lon is None:
                 return None
             coords.append(f"{lon},{lat}")
-        if destination:
-            geocoded = self._geocode(destination)
-            if geocoded:
-                coords.append(f"{geocoded[1]},{geocoded[0]}")
+        # Skip geocoding destination for now
+        # if destination:
+        #     geocoded = self._geocode(destination)
+        #     if geocoded:
+        #         coords.append(f"{geocoded[1]},{geocoded[0]}")
 
         if len(coords) < 2:
             return None
@@ -553,15 +600,22 @@ class RoutingService:
         route = data["routes"][0]
         dist_m = route.get("distance", 0)
         dur_s = route.get("duration", 0)
+
+        # Apply basic traffic multiplier based on current time
+        traffic_multiplier = self._get_traffic_multiplier()
+        adjusted_dur_s = dur_s * traffic_multiplier
+
         return {
             "distance_km": dist_m / 1000.0,
-            "travel_minutes": dur_s / 60.0,
+            "travel_minutes": adjusted_dur_s / 60.0,
+            "traffic_multiplier": traffic_multiplier,
+            "base_duration_minutes": dur_s / 60.0
         }
 
     def _ensure_coordinates(self, stops: List[dict]) -> List[dict]:
         """
-        Populate lat/lon for stops missing coordinates using geopy (Nominatim) with a small cache.
-        This keeps map/metrics usable even when BlueFolder data lacks geocodes.
+        Populate lat/lon for stops missing coordinates.
+        Geocoding is cached aggressively so repeat loads do not keep hitting providers.
         """
         enriched = []
         for stop in stops:
@@ -576,7 +630,6 @@ class RoutingService:
                         continue
                 except Exception:
                     pass
-            # geocode if needed
             coords = self._geocode(stop.get("address"))
             if coords:
                 lat_f, lon_f = coords
@@ -587,7 +640,9 @@ class RoutingService:
         return enriched
 
     def _geocode(self, address: str):
-        if not address or not self._geocoder:
+        if not address:
+            return None
+        if time_module.time() < self._geocode_backoff_until:
             return None
         try:
             if self._geocode_cache:
@@ -595,10 +650,12 @@ class RoutingService:
                 if cached:
                     return cached
             loc = None
+            if self._geoapify_key:
+                loc = self._geoapify_geocode(address)
             # googlemaps client
             try:
                 import googlemaps  # type: ignore
-                if isinstance(self._geocoder, googlemaps.Client):
+                if loc is None and self._geocoder and isinstance(self._geocoder, googlemaps.Client):
                     res = self._geocoder.geocode(address)
                     if res:
                         geom = res[0].get("geometry", {}).get("location", {})
@@ -609,17 +666,83 @@ class RoutingService:
             except Exception:
                 pass
             # geopy fallback
-            if loc is None and hasattr(self._geocoder, "geocode"):
-                geo_res = self._geocoder.geocode(address, timeout=5)
-                if geo_res and hasattr(geo_res, "latitude") and hasattr(geo_res, "longitude"):
-                    loc = (geo_res.latitude, geo_res.longitude)
+            if loc is None and self._geocoder and hasattr(self._geocoder, "geocode"):
+                try:
+                    now = time_module.time()
+                    wait_s = self._geocode_min_interval_seconds - (now - self._geocode_last_request_at)
+                    if wait_s > 0:
+                        time_module.sleep(wait_s)
+                    geo_res = self._geocoder.geocode(address, timeout=5)
+                    self._geocode_last_request_at = time_module.time()
+                    if geo_res and hasattr(geo_res, "latitude") and hasattr(geo_res, "longitude"):
+                        loc = (geo_res.latitude, geo_res.longitude)
+                except Exception as e:
+                    # Handle rate limiting and other geocoding errors gracefully
+                    if "429" in str(e) or "Too many requests" in str(e):
+                        self._geocode_backoff_until = time_module.time() + 300
+                        self._log("geocode_rate_limited", {"address": address[:50], "error": str(e)})
+                        # Return None to avoid breaking the flow, coordinates will be handled later
+                        return None
+                    else:
+                        self._log("geocode_error", {"address": address[:50], "error": str(e)})
+                        return None
             if loc:
                 if self._geocode_cache:
                     self._geocode_cache.set(address, loc)
                 return loc
-        except Exception:
+        except Exception as e:
+            self._log("geocode_unexpected_error", {"address": address[:50], "error": str(e)})
             return None
         return None
+
+    def _geoapify_geocode(self, address: str):
+        if not self._geoapify_key:
+            return None
+        import requests
+
+        cache_key = f"geoapify_geocode:{address.strip().lower()}"
+        if self._routing_api_cache:
+            cached = self._routing_api_cache.get(cache_key)
+            if cached:
+                return tuple(cached)
+
+        now = time_module.time()
+        wait_s = self._geocode_min_interval_seconds - (now - self._geocode_last_request_at)
+        if wait_s > 0:
+            time_module.sleep(wait_s)
+
+        resp = requests.get(
+            "https://api.geoapify.com/v1/geocode/search",
+            params={
+                "text": address,
+                "limit": 1,
+                "format": "json",
+                "apiKey": self._geoapify_key,
+            },
+            timeout=8,
+        )
+        self._geocode_last_request_at = time_module.time()
+        if resp.status_code == 429:
+            self._geocode_backoff_until = time_module.time() + 300
+            self._log("geoapify_geocode_rate_limited", {"address": address[:50]})
+            return None
+        if resp.status_code != 200:
+            self._log("geoapify_geocode_error", {"address": address[:50], "status": resp.status_code})
+            return None
+
+        data = resp.json() if resp.content else {}
+        results = data.get("results") if isinstance(data, dict) else None
+        if not results:
+            return None
+        first = results[0]
+        lat = first.get("lat")
+        lon = first.get("lon")
+        if lat is None or lon is None:
+            return None
+        loc = (float(lat), float(lon))
+        if self._routing_api_cache:
+            self._routing_api_cache.set(cache_key, list(loc))
+        return loc
 
     def _apply_manual_order(self, stops: List[dict], manual_order: List[str]):
         if not manual_order:
@@ -631,7 +754,7 @@ class RoutingService:
         # Prefer a routed path (OSRM, then Geoapify) when available; fall back to straight coords.
         coords_lonlat = self._collect_lonlat(origin, destination, stops)
 
-        if any(self._osrm_urls.values()) and len(coords_lonlat) >= 2:
+        if self._allow_osrm and len(coords_lonlat) >= 2:
             try:
                 path = self._osrm_route(stops, origin=origin, destination=destination)
                 if path:
@@ -653,17 +776,21 @@ class RoutingService:
     def _build_metrics(self, stops: Sequence[dict], origin: str = None, destination: str = None):
         total_distance_km = 0.0
         total_travel_minutes = 0.0
+        traffic_multiplier = 1.0
+        base_duration_minutes = 0.0
         coords_lonlat = self._collect_lonlat(origin, destination, stops)
         path = None
 
         # Try OSRM first for both path and metrics.
-        if any(self._osrm_urls.values()) and len(stops) >= 2:
+        if self._allow_osrm and len(stops) >= 2:
             try:
                 path = self._osrm_route(stops, origin=origin, destination=destination)
                 osrm_metrics = self._osrm_metrics(path) if path else None
                 if osrm_metrics:
                     total_distance_km = osrm_metrics["distance_km"]
                     total_travel_minutes = osrm_metrics["travel_minutes"]
+                    traffic_multiplier = osrm_metrics.get("traffic_multiplier", 1.0)
+                    base_duration_minutes = osrm_metrics.get("base_duration_minutes", total_travel_minutes)
             except Exception:
                 path = None
 
@@ -711,8 +838,10 @@ class RoutingService:
             "total_travel_minutes": int(total_travel_minutes),
             "estimated_completion": eta_cursor.strftime("%H:%M"),
             "includes_origin_destination": bool(origin or destination),
+            "traffic_multiplier": round(traffic_multiplier, 2),
+            "base_duration_minutes": int(base_duration_minutes),
         }
-        return metrics, enriched_stops
+        return metrics, enriched_stops, path
 
     def _collect_lonlat(self, origin: str, destination: str, stops: Sequence[dict]):
         coords = []
@@ -735,7 +864,12 @@ class RoutingService:
             return None, None, None
         import requests
 
-        waypoint_param = "|".join(f"{lon},{lat}" for lon, lat in coords_lonlat)
+        waypoint_param = "|".join(f"lonlat:{lon},{lat}" for lon, lat in coords_lonlat)
+        cache_key = f"geoapify_route:{waypoint_param}"
+        if self._routing_api_cache:
+            cached = self._routing_api_cache.get(cache_key)
+            if cached:
+                return tuple(cached)
         params = {
             "waypoints": waypoint_param,
             "mode": "drive",
@@ -745,6 +879,7 @@ class RoutingService:
         url = "https://api.geoapify.com/v1/routing"
         resp = requests.get(url, params=params, timeout=8)
         if resp.status_code != 200:
+            self._log("geoapify_route_error", {"status": resp.status_code, "body": resp.text[:200]})
             return None, None, None
         data = resp.json()
         if not data or "features" not in data or not data["features"]:
@@ -754,12 +889,24 @@ class RoutingService:
         coords = geom.get("coordinates")
         if not coords:
             return None, None, None
-        # GeoJSON LineString: [ [lon, lat], ... ]
-        line = coords[0] if isinstance(coords[0][0], list) else coords
+        # Geoapify may return a MultiLineString, with one line per leg.
+        # Flatten legs into a single path while avoiding duplicate join points.
+        if isinstance(coords[0][0], list):
+            flat = []
+            for idx, leg in enumerate(coords):
+                if not leg:
+                    continue
+                points = leg[1:] if idx > 0 and flat else leg
+                flat.extend(points)
+            line = flat
+        else:
+            line = coords
         path_latlon = [[pt[1], pt[0]] for pt in line]
         props = feature.get("properties", {})
         dist_km = props.get("distance") / 1000.0 if props.get("distance") is not None else None
         time_min = props.get("time") / 60.0 if props.get("time") is not None else None
+        if self._routing_api_cache:
+            self._routing_api_cache.set(cache_key, [path_latlon, dist_km, time_min])
         return path_latlon, dist_km, time_min
 
     @staticmethod
@@ -786,7 +933,7 @@ class RoutingService:
         for s in stops:
             if s.get("lat") is None or s.get("lon") is None:
                 return None
-            coords.append({"lat": float(s["lat"]), "lon": float(s["lon"])})
+            coords.append({"location": [float(s["lon"]), float(s["lat"])]})
         if len(coords) < 2:
             return None
 
@@ -795,9 +942,15 @@ class RoutingService:
             "sources": coords,
             "targets": coords,
         }
+        cache_key = f"geoapify_matrix:{json.dumps(body, sort_keys=True, separators=(',', ':'))}"
+        if self._routing_api_cache:
+            cached = self._routing_api_cache.get(cache_key)
+            if cached:
+                return cached
         url = f"https://api.geoapify.com/v1/routematrix?apiKey={self._geoapify_key}"
         resp = requests.post(url, json=body, timeout=8)
         if resp.status_code != 200:
+            self._log("geoapify_matrix_error", {"status": resp.status_code, "body": resp.text[:200]})
             return None
         data = resp.json()
         if not isinstance(data, dict):
@@ -829,4 +982,6 @@ class RoutingService:
                 time_s = row.get("time")
                 if time_s is not None:
                     matrix[si][ti] = time_s / 60.0
+        if self._routing_api_cache:
+            self._routing_api_cache.set(cache_key, matrix)
         return matrix

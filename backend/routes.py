@@ -30,13 +30,25 @@ def preview():
     stops=bf.get_tech_assignments_for_day(tech_id,date, api_key=api_key, account=account)
     origin=request.args.get("origin")
     destination=request.args.get("destination")
-    optimize=request.args.get("optimize")
+    optimize=request.args.get("optimize", "false").lower() in ("true", "1", "yes")
+
     try:
         current_app.logger.info("preview_request", extra={"tech_id": tech_id, "date": str(date), "optimize": optimize, "origin": origin, "destination": destination})
         current_app.logger.info("preview_stops", extra={"count": len(stops), "sample": stops[:1]})
     except Exception:
         pass
-    return jsonify(router.preview_route(stops, origin=origin, destination=destination, optimize=optimize in ("true","1",True)))
+
+    # The optimize checkbox should control whether we return the optimized route,
+    # not whether we also compute a comparison payload. That extra work can burst
+    # through third-party API rate limits and the current frontend does not use it.
+    result = router.preview_route(
+        stops,
+        origin=origin,
+        destination=destination,
+        optimize=optimize,
+    )
+
+    return jsonify(result)
 
 @api.post("/route/simulate")
 def simulate():
@@ -53,12 +65,31 @@ def simulate():
     )
     return jsonify(result)
 
-@api.post("/route/commit")
-def commit():
-    data=request.get_json()
-    tech_id=int(data.get("tech_id"))
-    day=datetime.fromisoformat(data.get("date")).date()
-    manual_order=data.get("manual_order",[])
-    ordered_stops=data.get("ordered_stops",[])
-    bf.commit_route(tech_id, day, ordered_stops, manual_order)
-    return jsonify({"status":"ok","tech_id":tech_id,"date":day.isoformat()})
+@api.post("/route/apply_optimization")
+def apply_optimization():
+    """Apply the optimized route order back to BlueFolder"""
+    data = request.get_json()
+    tech_id = int(data.get("tech_id"))
+    date = datetime.fromisoformat(data.get("date")).date()
+    api_key, account = _creds_from_headers(request)
+
+    # Get current assignments
+    stops = bf.get_tech_assignments_for_day(tech_id, date, api_key=api_key, account=account)
+
+    # Generate optimized order
+    optimized_result = router.preview_route(stops, optimize=True)
+    optimized_stops = optimized_result["stops"]
+
+    # Extract the optimized order IDs
+    manual_order = [str(stop["id"]) for stop in optimized_stops]
+
+    # Apply to BlueFolder via existing commit functionality
+    bf.commit_route(tech_id, date, optimized_stops, manual_order)
+
+    return jsonify({
+        "status": "applied",
+        "tech_id": tech_id,
+        "date": date.isoformat(),
+        "optimized_stops": len(optimized_stops),
+        "message": f"Optimized route applied to BlueFolder for technician {tech_id}"
+    })

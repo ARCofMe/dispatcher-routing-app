@@ -82,7 +82,7 @@ export default function MetricsPanel({
             >
               {legs.map((leg, idx) => (
                 <li key={idx} style={{ fontSize: 12 }}>
-                  Leg {idx + 1}: {leg.miles.toFixed(2)} miles
+                  {leg.fromLabel} → {leg.toLabel}: {leg.miles.toFixed(2)} miles
                   {metrics.total_travel_minutes ? (
                     <span style={{ color: "#93c5fd", marginLeft: 6 }}>
                       ~

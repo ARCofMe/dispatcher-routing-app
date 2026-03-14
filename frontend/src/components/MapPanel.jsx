@@ -203,7 +203,6 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
   );
 
   const center = markers[0]?.position || { lat: 39.5, lng: -98.35 };
-  const hasEndpoints = Boolean(originAddress || destinationAddress);
 
   const pathLatLng = path
     .filter((p) => Array.isArray(p) && p.length === 2)
@@ -357,7 +356,7 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
           });
         }
         // Start / end markers with distinct colors when advanced markers are available
-        if (hasEndpoints && endPos) {
+        if (endPos) {
           const endPin = new PinElement({
             glyphText: "F",
             background: "#ef4444",
@@ -372,7 +371,7 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
             })
           );
         }
-        if (hasEndpoints && startPos) {
+        if (startPos) {
             const startPin = new PinElement({
               glyphText: "S",
               background: "#22c55e",
@@ -440,8 +439,8 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
             {markers.map((m) => (
               <LeafletMarker key={m.id} position={m.position} icon={buildIcon(m.label, EQUIPMENT_META[m.equipment]?.bg || "#2563eb")} />
             ))}
-            {hasEndpoints && startPos && <LeafletMarker position={startPos} icon={startIcon} />}
-            {hasEndpoints && endPos && <LeafletMarker position={endPos} icon={finishIcon} />}
+            {startPos && <LeafletMarker position={startPos} icon={startIcon} />}
+            {endPos && <LeafletMarker position={endPos} icon={finishIcon} />}
             {pathLatLng.length > 1 && <LeafletPolyline positions={pathLatLng} pathOptions={{ color: "#2563eb", weight: 4, opacity: 0.85 }} />}
           </MapContainer>
         </div>
@@ -491,7 +490,7 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
         >
         {(!advSupported || advMarkersRef.current.length === 0) && (
           <>
-            {hasEndpoints && startPos && (
+            {startPos && (
               <Marker
                 position={startPos}
                 label="S"
@@ -499,7 +498,7 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
                 icon={{ url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" }}
               />
             )}
-            {hasEndpoints && endPos && (
+            {endPos && (
               <Marker
                 position={endPos}
                 label="F"

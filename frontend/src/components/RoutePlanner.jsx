@@ -13,6 +13,28 @@ const getLocalISODate = () => {
   return `${y}-${m}-${d}`;
 };
 
+const createClientId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `stop-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const normalizePreviewResponse = (data) => {
+  if (!data || typeof data !== "object") return null;
+  if (Array.isArray(data.stops)) return data;
+  if (data.optimized_order && Array.isArray(data.optimized_order.stops)) {
+    return {
+      ...data.optimized_order,
+      original_order: data.original_order,
+      optimized_order: data.optimized_order,
+      comparison: data.comparison,
+      recommend_optimization: data.recommend_optimization,
+    };
+  }
+  return data;
+};
+
 export default function RoutePlanner({ techId, theme, onDateChange, dateValue }) {
   const [date, setDate] = useState(() => dateValue || getLocalISODate());
   const [route, setRoute] = useState(null);
@@ -31,7 +53,7 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
   const destinationKey = useMemo(() => `route-destination-${techId}`, [techId]);
   const cacheKey = useMemo(() => `route-cache-${techId}-${date}`, [techId, date]);
   const [validation, setValidation] = useState({ late: 0 });
-  const [optimizeWaypoints, setOptimizeWaypoints] = useState(true);
+  const [optimizeWaypoints, setOptimizeWaypoints] = useState(false);
   const clientIdMapRef = useRef(new Map());
 
   useEffect(() => {
@@ -54,7 +76,7 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
     return stops.map((s) => {
       const key = s.id || s.service_request_id || s.address || `${s.lat}-${s.lon}`;
       if (!clientIdMapRef.current.has(key)) {
-        clientIdMapRef.current.set(key, crypto.randomUUID());
+        clientIdMapRef.current.set(key, createClientId());
       }
       const clientId = clientIdMapRef.current.get(key);
       return s.__clientId ? s : { ...s, __clientId: clientId };
@@ -71,13 +93,14 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
     setLoading(true);
     setError("");
     try {
-      const data = await fetchRoutePreview(
+      const raw = await fetchRoutePreview(
         techId,
         date,
         originAddress || undefined,
         destinationAddress || undefined,
         optimizeWaypoints || undefined
       );
+      const data = normalizePreviewResponse(raw);
       setRoute(attachClientIdsToRoute(data));
       setPrevMetrics(data?.metrics || null);
       setRouteStats({ waypointMiles: data?.metrics?.total_distance_miles });
@@ -90,6 +113,7 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
         if (destinationAddress) localStorage.setItem(destinationKey, destinationAddress);
       } catch {}
     } catch (err) {
+      console.error("Route preview load failed", err);
       setError("Failed to load preview");
     } finally {
       setLoading(false);
@@ -142,13 +166,34 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
       const h = Math.sin(dlat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dlon / 2) ** 2;
       return 2 * 6371 * Math.asin(Math.sqrt(h)); // km
     };
+    const points = [];
+    if (originAddress && path[0]) {
+      points.push({ label: "Origin", coords: path[0] });
+    }
+    (route?.stops || []).forEach((s, idx) => {
+      if (s.lat == null || s.lon == null) return;
+      points.push({
+        label: s.customer_name || `Stop ${idx + 1}`,
+        coords: [Number(s.lat), Number(s.lon)],
+      });
+    });
+    if (destinationAddress && path[path.length - 1]) {
+      points.push({ label: "Destination", coords: path[path.length - 1] });
+    }
+
     const res = [];
-    for (let i = 1; i < path.length; i++) {
-      const km = hv(path[i - 1], path[i]);
-      res.push({ index: i, km, miles: km * 0.621371 });
+    for (let i = 1; i < points.length; i++) {
+      const km = hv(points[i - 1].coords, points[i].coords);
+      res.push({
+        index: i,
+        fromLabel: points[i - 1].label,
+        toLabel: points[i].label,
+        km,
+        miles: km * 0.621371,
+      });
     }
     return res;
-  }, [path]);
+  }, [path, route?.stops, originAddress, destinationAddress]);
 
   const handleStatusChange = (index, nextStatus) => {
     setRoute((prev) => {
