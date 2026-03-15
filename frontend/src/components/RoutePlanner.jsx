@@ -35,6 +35,19 @@ const normalizePreviewResponse = (data) => {
   return data;
 };
 
+const summarizeStopLabel = (stop, fallbackIndex) => {
+  const raw = String(stop?.address || "").trim();
+  if (!raw) return `Stop ${fallbackIndex + 1}`;
+  const parts = raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0]}, ${parts[1]}`;
+  }
+  return parts[0];
+};
+
 export default function RoutePlanner({ techId, theme, onDateChange, dateValue }) {
   const [date, setDate] = useState(() => dateValue || getLocalISODate());
   const [route, setRoute] = useState(null);
@@ -173,7 +186,7 @@ export default function RoutePlanner({ techId, theme, onDateChange, dateValue })
     (route?.stops || []).forEach((s, idx) => {
       if (s.lat == null || s.lon == null) return;
       points.push({
-        label: s.customer_name || `Stop ${idx + 1}`,
+        label: summarizeStopLabel(s, idx),
         coords: [Number(s.lat), Number(s.lon)],
       });
     });

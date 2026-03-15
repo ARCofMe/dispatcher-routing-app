@@ -38,6 +38,11 @@ export default function App() {
 
   return (
     <div style={pageStyle}>
+      <style>{`
+        input[type="date"]::-webkit-calendar-picker-indicator {
+          ${isDark ? "filter: invert(1) brightness(1.2);" : "filter: none;"}
+        }
+      `}</style>
       <div style={shellStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <BrandHeader techName={techName} date={selectedDate} theme={theme} />

@@ -131,7 +131,7 @@ export default function StopList({ stops, onReorder, onStatusChange, onEditStop 
                             {s.subject && <div style={{ fontSize: 12, color: "#e2e8f0" }}>Subject: {s.subject}</div>}
                             {bfAccount && s.service_request_id && (
                               <a
-                                href={`https://${bfAccount}.bluefolder.com/serviceRequests/${s.service_request_id}`}
+                                href={`https://${bfAccount}.bluefolder.com/service/srLog.aspx?srid=${s.service_request_id}`}
                                 target="_blank"
                                 rel="noreferrer"
                                 style={{ fontSize: 12, color: "#38bdf8" }}
