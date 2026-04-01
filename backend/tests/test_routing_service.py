@@ -73,3 +73,40 @@ def test_optimize_order_by_window(routing):
     result = routing.simulate_route(copy.deepcopy(stops), [], [], [], optimize=True)
     returned_ids = [s["id"] for s in result["stops"]]
     assert returned_ids == ["B", "C", "A"]
+
+
+def test_select_geoapify_result_prefers_matching_us_state_and_zip(routing):
+    results = [
+        {
+            "formatted": "Lisbon, Portugal",
+            "country_code": "pt",
+            "city": "Lisbon",
+            "state_code": "",
+            "postcode": "",
+            "lat": 38.7223,
+            "lon": -9.1393,
+        },
+        {
+            "formatted": "Lisbon, ME 04250, United States of America",
+            "country_code": "us",
+            "city": "Lisbon",
+            "state_code": "ME",
+            "postcode": "04250",
+            "lat": 44.0187,
+            "lon": -70.0939,
+        },
+    ]
+
+    chosen = routing._select_geoapify_result("123 Main St, Lisbon, ME, 04250", results)
+
+    assert chosen["country_code"] == "us"
+    assert chosen["state_code"] == "ME"
+    assert chosen["postcode"] == "04250"
+
+
+def test_address_hints_extract_city_state_and_zip(routing):
+    hints = routing._address_hints("123 Main St, Lisbon, ME, 04250")
+
+    assert hints["city"] == "lisbon"
+    assert hints["state_code"] == "ME"
+    assert hints["postcode"] == "04250"

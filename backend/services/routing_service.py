@@ -2,6 +2,7 @@ import os
 import sys
 import math
 import json
+import re
 import time as time_module
 from datetime import datetime, time, timedelta
 from typing import List, Sequence
@@ -24,6 +25,14 @@ class RoutingService:
 
     AVERAGE_SPEED_KMH = 40  # Safe default for ETA calculations when a routing engine is unavailable.
     START_TIME = time(8, 0)
+    _STATE_NAME_TO_CODE = {
+        "maine": "ME",
+        "new hampshire": "NH",
+        "massachusetts": "MA",
+        "vermont": "VT",
+        "connecticut": "CT",
+        "rhode island": "RI",
+    }
 
     def __init__(self):
         _maybe_extend_sys_path()
@@ -715,8 +724,9 @@ class RoutingService:
             "https://api.geoapify.com/v1/geocode/search",
             params={
                 "text": address,
-                "limit": 1,
+                "limit": 5,
                 "format": "json",
+                "filter": "countrycode:us",
                 "apiKey": self._geoapify_key,
             },
             timeout=8,
@@ -734,15 +744,98 @@ class RoutingService:
         results = data.get("results") if isinstance(data, dict) else None
         if not results:
             return None
-        first = results[0]
-        lat = first.get("lat")
-        lon = first.get("lon")
+        best = self._select_geoapify_result(address, results)
+        lat = best.get("lat")
+        lon = best.get("lon")
         if lat is None or lon is None:
             return None
         loc = (float(lat), float(lon))
         if self._routing_api_cache:
             self._routing_api_cache.set(cache_key, list(loc))
         return loc
+
+    def _select_geoapify_result(self, address: str, results: Sequence[dict]):
+        """Prefer US/state/city/ZIP-aligned geocode results over the first raw match."""
+        hints = self._address_hints(address)
+
+        def score(result: dict) -> int:
+            total = 0
+            country_code = str(result.get("country_code") or "").strip().upper()
+            if country_code == "US":
+                total += 50
+            state_code = str(result.get("state_code") or "").strip().upper()
+            if hints["state_code"] and state_code == hints["state_code"]:
+                total += 30
+            city = str(
+                result.get("city")
+                or result.get("town")
+                or result.get("village")
+                or result.get("county")
+                or ""
+            ).strip().casefold()
+            if hints["city"] and city == hints["city"]:
+                total += 15
+            postcode = str(result.get("postcode") or "").strip()
+            if hints["postcode"] and postcode == hints["postcode"]:
+                total += 20
+            formatted = str(result.get("formatted") or "").casefold()
+            if hints["state_code"] and hints["state_code"].casefold() in formatted:
+                total += 5
+            if hints["city"] and hints["city"] in formatted:
+                total += 5
+            return total
+
+        ranked = sorted(results, key=score, reverse=True)
+        chosen = ranked[0] if ranked else results[0]
+        try:
+            self._log(
+                "geoapify_geocode_selected",
+                {
+                    "address": address[:80],
+                    "city_hint": hints["city"],
+                    "state_hint": hints["state_code"],
+                    "postcode_hint": hints["postcode"],
+                    "chosen_formatted": str(chosen.get("formatted") or "")[:120],
+                },
+            )
+        except Exception:
+            pass
+        return chosen
+
+    def _address_hints(self, address: str) -> dict:
+        """Extract city/state/ZIP hints from the BlueFolder-style address string."""
+        text = " ".join(str(address or "").split()).strip()
+        parts = [part.strip() for part in text.split(",") if part.strip()]
+        postcode_match = re.search(r"\b(\d{5}(?:-\d{4})?)\b", text)
+        postcode = postcode_match.group(1) if postcode_match else None
+
+        state_code = None
+        state_zip_match = re.search(r"\b([A-Z]{2})\s+\d{5}(?:-\d{4})?\b", text.upper())
+        if state_zip_match:
+            state_code = state_zip_match.group(1)
+        elif len(parts) >= 3:
+            candidate = parts[2].strip().upper()
+            if re.fullmatch(r"[A-Z]{2}", candidate):
+                state_code = candidate
+        else:
+            lowered = text.casefold()
+            for state_name, code in self._STATE_NAME_TO_CODE.items():
+                if state_name in lowered:
+                    state_code = code
+                    break
+
+        city = None
+        if len(parts) >= 2:
+            city = parts[1].casefold()
+            city = re.sub(r"\b(?:me|nh|ma|vt|ct|ri)\b", "", city, flags=re.IGNORECASE)
+            city = re.sub(r"\b\d{5}(?:-\d{4})?\b", "", city)
+            city = " ".join(city.split()).strip() or None
+
+        return {
+            "city": city,
+            "state_code": state_code,
+            "postcode": postcode,
+        }
 
     def _apply_manual_order(self, stops: List[dict], manual_order: List[str]):
         if not manual_order:
