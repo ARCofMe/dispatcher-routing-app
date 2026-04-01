@@ -169,7 +169,13 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
       const lonMissing = s.lon == null || Number.isNaN(Number(s.lon));
       const addr = normalizeAddress(s.address || "");
       if ((latMissing || lonMissing) && addr && !geoCache[s.id]) {
-        geocoder.geocode({ address: addr }, (results, status) => {
+        geocoder.geocode(
+          {
+            address: addr,
+            region: "us",
+            componentRestrictions: { country: "US" },
+          },
+          (results, status) => {
           if (status === "OK" && results && results[0]) {
             const loc = results[0].geometry.location;
             setGeoCache((prev) => ({ ...prev, [s.id]: { lat: loc.lat(), lng: loc.lng() } }));
@@ -177,7 +183,8 @@ export default function MapPanel({ stops = [], path = [], originAddress, destina
             // Surface failed lookups so missing markers are discoverable.
             console.warn("Geocode failed for stop", s.id, addr, status);
           }
-        });
+          }
+        );
       }
     });
   }, [stops, isLoaded, geoCache]);
